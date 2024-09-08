@@ -1,6 +1,5 @@
 import sys
 from pathlib import Path
-from enum import Enum, auto
 
 import cv2
 import numpy as np
@@ -9,36 +8,9 @@ from PySide6.QtCore import *
 from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 
-dtype = np.float64
+from .constants import BlendMode
 
-class BlendMode(Enum):
-    PASS = auto
-    NORMAL = auto
-    MULTIPLY = auto
-    SCREEN = auto
-    OVERLAY = auto
-    LINEAR_BURN = auto
-    LINEAR_DODGE = auto
-    LINEAR_LIGHT = auto
-    COLOR_BURN = auto
-    COLOR_DODGE = auto
-    VIVID_LIGHT = auto
-    SOFT_LIGHT = auto
-    HARD_LIGHT = auto
-    PIN_LIGHT = auto
-    HARD_MIX = auto
-    DARKEN = auto
-    LIGHTEN = auto
-    DARKEN_COLOR = auto
-    LIGHTEN_COLOR = auto
-    DIFFERENCE = auto
-    EXCLUDE = auto
-    SUBTRACT = auto
-    DIVIDE = auto
-    HUE = auto
-    SATURATION = auto
-    COLOR = auto
-    LUMINOSITY = auto
+dtype = np.float64
 
 def clamp(min_val, max_val, val):
     return max(min_val, min(max_val, val))

@@ -1,7 +1,7 @@
 #cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
 cimport cython
 import numpy as np
-from psd_tools.constants import BlendMode
+from .constants import BlendMode
 
 # https://dev.w3.org/SVG/modules/compositing/master/
 # http://ssp.impulsetrain.com/porterduff.html
@@ -448,21 +448,21 @@ blend_modes = {
     BlendMode.MULTIPLY: multiply,
     BlendMode.SCREEN: screen,
     BlendMode.OVERLAY: overlay,
-    BlendMode.LINEAR_BURN: ts_linear_burn,
-    BlendMode.LINEAR_DODGE: ts_linear_dodge,
-    BlendMode.LINEAR_LIGHT: ts_linear_light,
-    BlendMode.COLOR_BURN: ts_color_burn,
-    BlendMode.COLOR_DODGE: ts_color_dodge,
-    BlendMode.VIVID_LIGHT: ts_vivid_light,
+    BlendMode.LINEAR_BURN: sai_linear_burn,
+    BlendMode.LINEAR_DODGE: sai_linear_dodge,
+    BlendMode.LINEAR_LIGHT: sai_linear_light,
+    BlendMode.COLOR_BURN: sai_color_burn,
+    BlendMode.COLOR_DODGE: sai_color_dodge,
+    BlendMode.VIVID_LIGHT: sai_vivid_light,
     BlendMode.HARD_LIGHT: hard_light,
     BlendMode.SOFT_LIGHT: soft_light,
     BlendMode.PIN_LIGHT: pin_light,
-    BlendMode.HARD_MIX: ts_hard_mix,
+    BlendMode.HARD_MIX: sai_hard_mix,
     BlendMode.DARKEN: darken,
     BlendMode.LIGHTEN: lighten,
     BlendMode.DARKER_COLOR: darker_color,
     BlendMode.LIGHTER_COLOR: lighter_color,
-    BlendMode.DIFFERENCE: ts_difference,
+    BlendMode.DIFFERENCE: sai_difference,
     BlendMode.EXCLUSION: exclusion,
     BlendMode.SUBTRACT: subtract,
     BlendMode.DIVIDE: divide,
@@ -470,21 +470,15 @@ blend_modes = {
     BlendMode.SATURATION: saturation,
     BlendMode.COLOR: color,
     BlendMode.LUMINOSITY: luminosity,
+    BlendMode.TS_LINEAR_BURN: ts_linear_burn,
+    BlendMode.TS_LINEAR_DODGE: ts_linear_dodge,
+    BlendMode.TS_LINEAR_LIGHT: ts_linear_light,
+    BlendMode.TS_COLOR_BURN: ts_color_burn,
+    BlendMode.TS_COLOR_DODGE: ts_color_dodge,
+    BlendMode.TS_VIVID_LIGHT: ts_vivid_light,
+    BlendMode.TS_HARD_MIX: ts_hard_mix,
+    BlendMode.TS_DIFFERENCE: ts_difference,
 }
 
-special_blend_modes = {
-    BlendMode.LINEAR_BURN: sai_linear_burn,
-    BlendMode.LINEAR_DODGE: sai_linear_dodge,
-    BlendMode.LINEAR_LIGHT: sai_linear_light,
-    BlendMode.COLOR_BURN: sai_color_burn,
-    BlendMode.COLOR_DODGE: sai_color_dodge,
-    BlendMode.VIVID_LIGHT: sai_vivid_light,
-    BlendMode.HARD_MIX: sai_hard_mix,
-    BlendMode.DIFFERENCE: sai_difference,
-}
-
-def get_blend_func(blend_mode, special_mode):
-    if special_mode:
-        return special_blend_modes.get(blend_mode, normal)
-    else:
-        return blend_modes.get(blend_mode, normal)
+def get_blend_func(blend_mode):
+    return blend_modes.get(blend_mode, normal)
