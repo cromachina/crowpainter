@@ -2,10 +2,8 @@ import os
 import sys
 import shutil
 from distutils.core import Distribution, Extension
-import numpy
 from Cython.Build import build_ext, cythonize
-
-print(numpy.__version__)
+import numpy
 
 extension = Extension(
     '*',
