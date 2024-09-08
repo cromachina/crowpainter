@@ -32,12 +32,14 @@
           # Overrides for PySide6
           # https://github.com/nix-community/poetry2nix/issues/1191#issuecomment-1707590287
           pyside6 = final.pkgs.python312.pkgs.pyside6;
-          #shiboken6 = final.pkgs.python3.pkgs.shiboken6;
+          #shiboken6 = final.pkgs.python312.pkgs.shiboken6;
         });
 
         pythonRelaxDeps = [ ];
 
         dependencies = (with pkgs; [
+          pkgs.python312.pkgs.distutils
+
           zlib
           dbus
           fontconfig

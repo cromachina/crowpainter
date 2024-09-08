@@ -727,4 +727,4 @@ zarr = ["fsspec", "zarr"]
 [metadata]
 lock-version = "2.0"
 python-versions = "3.12.*"
-content-hash = "3fb440d2500750c36dbf9bead05dbe084d8e341deadf9172c356a1b86246ae4e"
+content-hash = "41c3ff5a35d843b256f408580ffe70c846987c09b4278da739c59eacaafa8e09"
