@@ -1,1 +1,1 @@
- 
+The goal for this project is to make a drawing program that is similar in feel, functionality, and performance to Paint Tool SAI, but is also multi-platform, open source, and has support for scripts and plugins.
