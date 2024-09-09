@@ -22,7 +22,7 @@ cython = "*"
 psutil = "*"
 psd-tools = "*"
 opencv-python = "*"
-#numpy = "*"
+numpy = "*"
 pyrsistent = "*"
 PySide6 = "*"
 
