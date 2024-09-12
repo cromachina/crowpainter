@@ -13,7 +13,7 @@ cdef inline double _clip(double val) noexcept nogil:
     return max(min(val, 1), 0)
 
 @cython.ufunc
-cdef double clip(double val) noexcept nogil:
+cdef double clip(double val) nogil:
     return _clip(val)
 
 cdef double eps = np.finfo(np.float64).eps
@@ -22,7 +22,7 @@ cdef inline double _safe_divide(double a, double b) noexcept nogil:
     return a / (b + eps)
 
 @cython.ufunc
-cdef double safe_divide_ufunc(double a, double b) noexcept nogil:
+cdef double safe_divide_ufunc(double a, double b) nogil:
         return _safe_divide(a, b)
 
 def safe_divide(a, b, /, **kwargs):
@@ -33,7 +33,7 @@ cdef inline double _clip_divide(double a, double b) noexcept nogil:
     return _clip(_safe_divide(a, b))
 
 @cython.ufunc
-cdef double clip_divide_ufunc(double a, double b) noexcept nogil:
+cdef double clip_divide_ufunc(double a, double b) nogil:
     return _clip_divide(a, b)
 
 def clip_divide(a, b, /, **kwargs):
@@ -44,29 +44,29 @@ cdef inline double _comp(double C, double A) noexcept nogil:
     return C * (1 - A)
 
 @cython.ufunc
-cdef double comp(double a, double b) noexcept nogil:
+cdef double comp(double a, double b) nogil:
     return _comp(a, b)
 
 cdef inline double _comp2(double Cd, double Cs, double Ad, double As) noexcept nogil:
     return _comp(Cd, As) + _comp(Cs, Ad)
 
 @cython.ufunc
-cdef double comp2(double Cd, double Cs, double Ad, double As)  noexcept nogil:
+cdef double comp2(double Cd, double Cs, double Ad, double As) nogil:
     return _comp2(Cd, Cs, Ad, As)
 
 cdef inline double _lerp(double a, double b, double t) noexcept nogil:
     return (b - a) * t + a
 
 @cython.ufunc
-cdef double lerp(double a, double b, double t) noexcept nogil:
+cdef double lerp(double a, double b, double t) nogil:
     return _lerp(a, b, t)
 
 @cython.ufunc
-cdef double normal(double Cd, double Cs, double Ad, double As) noexcept nogil:
+cdef double normal(double Cd, double Cs, double Ad, double As) nogil:
     return Cs + _comp(Cd, As)
 
 @cython.ufunc
-cdef double normal_alpha(double Ad, double As) noexcept nogil:
+cdef double normal_alpha(double Ad, double As) nogil:
     return Ad + As - Ad * As
 
 cdef inline double _blend(double Csp, double Cdp, double Asrc, double Adst, double Aboth, double B) noexcept nogil:
