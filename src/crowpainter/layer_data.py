@@ -75,6 +75,13 @@ class PixelLayer(BaseLayer):
     def get_pixel_data(self, target_color_buffer:np.ndarray, target_alpha_buffer:np.ndarray, target_offset:IVec2):
         color = get_overlap_regions(self.color, self.position, target_color_buffer, target_offset)
         alpha = get_overlap_regions(self.alpha, self.position, target_alpha_buffer, target_offset)
+        d = {}
+        for k,c in color.items():
+            aa = alpha.get(k)
+            if aa is None:
+                aa = np.ones_like(c)
+            d[k] = (c, aa)
+        return d
 
     def thaw(self):
         return self.set(color=thaw(self.color), alpha=thaw(self.color))
@@ -104,17 +111,20 @@ class Canvas(PClass):
 
 def get_overlap_regions(tiles:PMap[IVec2, BaseTile], tiles_offset:IVec2, target_buffer:np.ndarray, target_offset:IVec2) -> dict[IVec2, tuple[np.ndarray, np.ndarray]]:
     regions = dict()
-    offset = np.array(tiles_offset) - np.array(target_offset)
+    relative_offset = np.array(tiles_offset) - np.array(target_offset)
     for point in util.generate_points(target_buffer.shape[:2], TILE_SIZE):
-        relative_offset = np.array(point) - offset
-        absolute_offset = tuple(np.array(point) + np.array(target_offset))
-        index = tuple(relative_offset // TILE_SIZE)
-        region = tiles.get(index)
+        point_offset = np.array(point) - relative_offset
+        tile_index = point_offset // TILE_SIZE
+        region_offset = (tile_index * TILE_SIZE) + relative_offset
+        region = tiles.get(tuple(tile_index))
         if region is not None:
-            regions[absolute_offset] = util.get_overlap_tiles(target_buffer, region.data, tuple(-relative_offset))
+            overlap_tiles = util.get_overlap_tiles(target_buffer, region.data, tuple(region_offset))
+            overlap_shape = overlap_tiles[0].shape[:2]
+            if overlap_shape[0] != 0 and overlap_shape[1] != 0:
+                regions[tuple(tile_index)] = overlap_tiles
     return regions
 
-def pixel_data_to_tiles(data:np.ndarray, tile_constructor) -> list[np.ndarray]:
+def pixel_data_to_tiles(data:np.ndarray, tile_constructor):
     if data is None:
         return pmap()
     tiles = {}
