@@ -61,6 +61,9 @@ class BaseLayer(SelectableObject):
     def get_mask_data(self, target_alpha_buffer:np.ndarray, target_offset:IVec2):
         return None if self.mask is None else self.mask.get_mask_data(target_alpha_buffer, target_offset)
 
+    def thaw(self):
+        return self.set(mask=self.mask.thaw())
+
 class PixelLayer(BaseLayer):
     position:IVec2 = field(initial=(0, 0))
     color:PMap[IVec2, ColorTile] = field(initial=pmap())
@@ -69,7 +72,9 @@ class PixelLayer(BaseLayer):
     def get_pixel_data(self, target_color_buffer:np.ndarray, target_alpha_buffer:np.ndarray, target_offset:IVec2):
         color = get_overlap_regions(self.color, self.position, target_color_buffer, target_offset)
         alpha = get_overlap_regions(self.alpha, self.position, target_alpha_buffer, target_offset)
-        return { k:(c, alpha[k]) for k,c in color.items() }
+
+    def thaw(self):
+        return self.set(color=thaw(self.color), alpha=thaw(self.color))
 
 class GroupLayer(BaseLayer):
     layers:PVector[BaseLayer] = field(initial=pvector())
@@ -80,10 +85,19 @@ class GroupLayer(BaseLayer):
     def __reversed__(self):
         return reversed(self.layers)
 
+    def thaw(self):
+        return self.set(layers=[layer.thaw() for layer in self.layers])
+
 class Canvas(PClass):
     size:IVec2 = field(initial=(0, 0))
     top_level:PVector[BaseLayer] = field(initial=pvector())
     selection:Mask | None = field(initial=None)
+
+    def thaw(self):
+        return self.set(
+            top_level=[layer.thaw() for layer in self.top_level],
+            selection=self.selection.thaw() if self.selection is not None else None
+        )
 
 def get_overlap_regions(tiles:PMap[IVec2, BaseTile], tiles_offset:IVec2, target_buffer:np.ndarray, target_offset:IVec2) -> dict[IVec2, tuple[np.ndarray, np.ndarray]]:
     regions = dict()
