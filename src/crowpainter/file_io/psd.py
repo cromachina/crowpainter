@@ -65,11 +65,18 @@ def _get_protection_settings(layer:psdl.Layer):
     data = lspf.data if lspf else 0
     return tuple((util.bit(data, bit) for bit in [0, 1, 2, 32]))
 
+def _get_layer_channel(layer:psdl.Layer, channel):
+    data = layer.numpy(channel)
+    tile_type = ColorTile if channel == 'color' else AlphaTile
+    if data is not None:
+        data = data.astype(DTYPE)
+    return pixel_data_to_tiles(data, tile_type)
+
 def _get_mask(layer:psdl.Layer):
     if layer.mask:
         return Mask(
             position=(layer.mask.top, layer.mask.left),
-            alpha=pixel_data_to_tiles(layer.numpy('mask').astype(DTYPE), AlphaTile),
+            alpha=_get_layer_channel(layer, 'mask'),
             visible=not layer.mask.disabled,
             background_color=DTYPE(layer.background_color / 255),
         )
@@ -100,8 +107,8 @@ def _get_group_layer_properties(layer:psdl.Layer):
 
 def _get_pixel_layer_properties(layer:psdl.Layer):
     return {
-        'color': pixel_data_to_tiles(layer.numpy('color').astype(DTYPE), ColorTile),
-        'alpha': pixel_data_to_tiles(layer.numpy('shape').astype(DTYPE), AlphaTile),
+        'color': _get_layer_channel(layer, 'color'),
+        'alpha': _get_layer_channel(layer, 'shape'),
         'position': (layer.top, layer.left),
     }
 
@@ -118,7 +125,7 @@ def _build_sublayers(psd_group) -> GroupLayer:
 def read(file_path:Path) -> Canvas:
     psd_file = psd_tools.PSDImage.open(str(file_path))
 
-    canvas = Canvas(
+    return Canvas(
         size=(psd_file.height, psd_file.width),
         top_level = _build_sublayers(psd_file),
     )
