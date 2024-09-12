@@ -21,7 +21,7 @@ from .layer_data import *
 def check_lock(arr:np.ndarray):
     return arr if arr.flags.writeable else None
 
-async def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[np.ndarray, np.ndarray]):
+def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[np.ndarray, np.ndarray]):
     color_dst, alpha_dst = backdrop
 
     for sublayer in layer:
@@ -36,7 +36,7 @@ async def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:t
                 next_color = np.zeros_like(color_dst)
                 next_alpha = np.zeros_like(alpha_dst)
                 next_backdrop = (next_color, next_alpha)
-            color_src, alpha_src = await composite(sublayer, offset, next_backdrop)
+            color_src, alpha_src = composite(sublayer, offset, next_backdrop)
             pixel_srcs = { offset: ((color_dst, color_src), (alpha_dst, alpha_src)) }
         elif isinstance(sublayer, PixelLayer):
             pixel_srcs = sublayer.get_pixel_data(color_dst, alpha_dst, offset)

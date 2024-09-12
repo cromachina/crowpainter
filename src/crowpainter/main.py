@@ -19,11 +19,11 @@ from .file_io import psd, image, native
 
 class ExtendedInfoMessage(QDialog):
     def __init__(self, parent=None, title='', text=''):
-        super().__init__()
+        super().__init__(parent)
         self.setWindowTitle(title)
         self.text = text
         copy_button = QPushButton(text='Copy text')
-        copy_button.clicked.connect(self.on_copy)
+        copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.text))
         button = QDialogButtonBox.Close
         self.buttonBox = QDialogButtonBox(button)
         self.buttonBox.accepted.connect(self.accept)
@@ -37,9 +37,8 @@ class ExtendedInfoMessage(QDialog):
         layout.addWidget(self.buttonBox)
         self.setLayout(layout)
 
-    def on_copy(self):
-        clipboard = QGuiApplication.clipboard()
-        clipboard.setText(self.text)
+def show_error_message(text):
+    ExtendedInfoMessage(title='Error', text=text).exec()
 
 class CanvasState():
     def __init__(self, initial_state:layer_data.Canvas, file_path:Path, on_filesystem:bool):
@@ -97,7 +96,7 @@ class Viewport(QGraphicsView):
         self.zoom = 1.0
         self.last_zoom = self.zoom
         self.rotation = 0.0
-        self.canvas_state:CanvasState = canvas_state
+        self.canvas_state = canvas_state
         self.composite = None
         self.pyramid = None
 
@@ -135,12 +134,16 @@ class Viewport(QGraphicsView):
     async def reset_viewport(self):
         self.scene().clear()
         canvas = self.canvas_state.get_current()
-        color = np.zeros(canvas.size + (3,), dtype=DTYPE)
-        alpha = np.zeros(canvas.size + (1,), dtype=DTYPE)
-        color, alpha = await composite.composite(canvas.top_level, (0, 0), (color, alpha))
-        color *= 255
-        color = color.astype(np.ubyte)
-        self.image = color
+        def comp_runner():
+            size = canvas.size
+            offset = (0, 0)
+            color = np.zeros(size + (3,), dtype=DTYPE)
+            alpha = np.zeros(size + (1,), dtype=DTYPE)
+            color, _ = composite.composite(canvas.top_level, offset, (color, alpha))
+            color *= 255
+            color = color.astype(np.ubyte)
+            return color
+        self.image = await util.peval(comp_runner)
         self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(self.image)))
         self.scene().addItem(self.pixmap)
 
@@ -204,30 +207,7 @@ class MainWindow(QMainWindow):
         files, _ = QFileDialog.getOpenFileNames(self, caption='Open', filter='All files (*.*)', dir='.')
         for file_path in files:
             # TODO check if file is already open and ask to reopen without saving.
-
-            file_path = Path(file_path)
-            file_type = file_path.suffix
-            try:
-                if file_type in ['.psd', '.psb']:
-                    canvas = psd.read(file_path)
-                elif file_type == '.crow':
-                    canvas = native.read(file_path)
-                else:
-                    canvas = image.read(file_path)
-            except Exception as ex:
-                logging.exception(ex)
-                QErrorMessage(self).showMessage(str(ex))
-                return
-
-            canvas_state = CanvasState(
-                initial_state=canvas,
-                file_path=file_path,
-                on_filesystem=True
-            )
-            viewport = Viewport(canvas_state)
-            self.viewports.append(viewport)
-            self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
-            await viewport.reset_viewport()
+            await self.open(file_path)
 
     def on_save(self):
         pass
@@ -237,6 +217,25 @@ class MainWindow(QMainWindow):
 
     def on_close(self):
         pass
+
+    async def open(self, file_path):
+        file_path = Path(file_path)
+        try:
+            canvas = await util.peval(lambda: open_file(file_path))
+        except Exception as ex:
+            logging.exception(ex)
+            show_error_message(ex)
+            return
+
+        canvas_state = CanvasState(
+            initial_state=canvas,
+            file_path=file_path,
+            on_filesystem=True
+        )
+        viewport = Viewport(canvas_state)
+        await viewport.reset_viewport()
+        self.viewports.append(viewport)
+        self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
 
     def create_menu_action(self, menu:QMenu, text:str, callback, enabled=True):
         action = QAction(text=text, parent=self)
@@ -260,6 +259,15 @@ class MainWindow(QMainWindow):
         menu_selection = menu.addMenu('&Selection')
         self.menu_view = menu.addMenu('&View')
         menu_window = menu.addMenu('&Window')
+
+def open_file(file_path:Path):
+    file_type = file_path.suffix
+    if file_type in ['.psd', '.psb']:
+        return psd.read(file_path)
+    elif file_type == '.crow':
+        return native.read(file_path)
+    else:
+        return image.read(file_path)
 
 def init_logging():
     logging.basicConfig(
