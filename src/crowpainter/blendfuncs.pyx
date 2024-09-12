@@ -62,11 +62,11 @@ cdef double lerp(double a, double b, double t) noexcept nogil:
     return _lerp(a, b, t)
 
 @cython.ufunc
-cdef double normal(double Cd, double Cs, double Ad, double As) nogil:
+cdef double normal(double Cd, double Cs, double Ad, double As) noexcept nogil:
     return Cs + _comp(Cd, As)
 
 @cython.ufunc
-cdef double normal_alpha(double Ad, double As) nogil:
+cdef double normal_alpha(double Ad, double As) noexcept nogil:
     return Ad + As - Ad * As
 
 cdef inline double _blend(double Csp, double Cdp, double Asrc, double Adst, double Aboth, double B) noexcept nogil:
@@ -296,7 +296,7 @@ cdef double sai_difference(double Cd, double Cs, double Ad, double As) nogil:
     return _lerp(Cs, D, Ad)
 
 @cython.ufunc
-cdef double exclusion(double Cd, double Cs, double Ad, double As) nogil:
+cdef double exclude(double Cd, double Cs, double Ad, double As) nogil:
     return (Cs * Ad + Cd * As - 2 * Cs * Cd) + _comp2(Cd, Cs, Ad, As)
 
 @cython.ufunc
@@ -419,29 +419,29 @@ cdef Color luminosity_nonseperable(double Cd_r, double Cd_g, double Cd_b, double
 
 luminosity = nonseperable(luminosity_nonseperable)
 
-cdef inline Color darker_color_straight(Color Cd, Color Cs) noexcept nogil:
+cdef inline Color darken_color_straight(Color Cd, Color Cs) noexcept nogil:
     if _lum(Cs) < _lum(Cd):
         return Cs
     else:
         return Cd
 
 @cython.ufunc
-cdef Color darker_color_nonseperable(double Cd_r, double Cd_g, double Cd_b, double Cs_r, double Cs_g, double Cs_b, double Ad, double As) noexcept nogil:
-    return _premul_nonseperable((Cd_r, Cd_g, Cd_b), (Cs_r, Cs_g, Cs_b), Ad, As, darker_color_straight)
+cdef Color darken_color_nonseperable(double Cd_r, double Cd_g, double Cd_b, double Cs_r, double Cs_g, double Cs_b, double Ad, double As) noexcept nogil:
+    return _premul_nonseperable((Cd_r, Cd_g, Cd_b), (Cs_r, Cs_g, Cs_b), Ad, As, darken_color_straight)
 
-darker_color = nonseperable(darker_color_nonseperable)
+darken_color = nonseperable(darken_color_nonseperable)
 
-cdef inline Color lighter_color_straight(Color Cd, Color Cs) noexcept nogil:
+cdef inline Color lighten_color_straight(Color Cd, Color Cs) noexcept nogil:
     if _lum(Cs) > _lum(Cd):
         return Cs
     else:
         return Cd
 
 @cython.ufunc
-cdef Color lighter_color_nonseperable(double Cd_r, double Cd_g, double Cd_b, double Cs_r, double Cs_g, double Cs_b, double Ad, double As) noexcept nogil:
-    return _premul_nonseperable((Cd_r, Cd_g, Cd_b), (Cs_r, Cs_g, Cs_b), Ad, As, lighter_color_straight)
+cdef Color lighten_color_nonseperable(double Cd_r, double Cd_g, double Cd_b, double Cs_r, double Cs_g, double Cs_b, double Ad, double As) noexcept nogil:
+    return _premul_nonseperable((Cd_r, Cd_g, Cd_b), (Cs_r, Cs_g, Cs_b), Ad, As, lighten_color_straight)
 
-lighter_color = nonseperable(lighter_color_nonseperable)
+lighten_color = nonseperable(lighten_color_nonseperable)
 
 blend_modes = {
     BlendMode.NORMAL: normal,
@@ -460,10 +460,10 @@ blend_modes = {
     BlendMode.HARD_MIX: sai_hard_mix,
     BlendMode.DARKEN: darken,
     BlendMode.LIGHTEN: lighten,
-    BlendMode.DARKER_COLOR: darker_color,
-    BlendMode.LIGHTER_COLOR: lighter_color,
+    BlendMode.DARKEN_COLOR: darken_color,
+    BlendMode.LIGHTEN_COLOR: lighten_color,
     BlendMode.DIFFERENCE: sai_difference,
-    BlendMode.EXCLUSION: exclusion,
+    BlendMode.EXCLUDE: exclude,
     BlendMode.SUBTRACT: subtract,
     BlendMode.DIVIDE: divide,
     BlendMode.HUE: hue,

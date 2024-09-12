@@ -1,5 +1,9 @@
 import sys
 from pathlib import Path
+import asyncio
+from collections import deque
+import logging
+import traceback
 
 import cv2
 import numpy as np
@@ -7,97 +11,44 @@ from pyrsistent import *
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 from PySide6.QtWidgets import *
+import PySide6.QtAsyncio as QtAsyncio
 
-from .constants import BlendMode
+from . import layer_data, composite, util
+from .constants import *
+from .file_io import psd, image, native
 
-dtype = np.float64
+class ExtendedInfoMessage(QDialog):
+    def __init__(self, parent=None, title='', text=''):
+        super().__init__()
+        self.setWindowTitle(title)
+        self.text = text
+        copy_button = QPushButton(text='Copy text')
+        copy_button.clicked.connect(self.on_copy)
+        button = QDialogButtonBox.Close
+        self.buttonBox = QDialogButtonBox(button)
+        self.buttonBox.accepted.connect(self.accept)
+        self.buttonBox.rejected.connect(self.reject)
+        layout = QVBoxLayout()
+        message = QPlainTextEdit(self)
+        message.setPlainText(text)
+        message.setReadOnly(True)
+        layout.addWidget(message)
+        layout.addWidget(copy_button)
+        layout.addWidget(self.buttonBox)
+        self.setLayout(layout)
 
-def clamp(min_val, max_val, val):
-    return max(min_val, min(max_val, val))
-
-def get_overlap_tiles(dst, src, offset):
-    ox, oy = offset
-    dx, dy = dst.shape[:2]
-    sx, sy = src.shape[:2]
-    d_min_x = clamp(0, dx, ox)
-    d_min_y = clamp(0, dy, oy)
-    d_max_x = clamp(0, dx, ox + sx)
-    d_max_y = clamp(0, dy, oy + sy)
-    s_min_x = clamp(0, sx, -ox)
-    s_min_y = clamp(0, sy, -oy)
-    s_max_x = clamp(0, sx, dx - ox)
-    s_max_y = clamp(0, sy, dy - oy)
-    return dst[d_min_x:d_max_x, d_min_y:d_max_y], src[s_min_x:s_max_x, s_min_y:s_max_y]
-
-def blit(dst, src, offset):
-    dst, src = get_overlap_tiles(dst, src, offset)
-    np.copyto(dst, src)
-
-def generate_tiles(size, tile_size):
-    height, width = size
-    tile_height, tile_width = tile_size
-    y = 0
-    while y < height:
-        x = 0
-        while x < width:
-            size_y = min(tile_height, height - y)
-            size_x = min(tile_width, width - x)
-            yield ((size_y, size_x), (y, x))
-            x += tile_width
-        y += tile_height
-
-TILE_SIZE = (256, 256)
-Vec2 = tuple[int, int]
-
-class Tile(PClass):
-    color = field(initial=np.zeros(TILE_SIZE + (3,), dtype=dtype))
-    alpha = field(initial=np.zeros(TILE_SIZE + (1,), dtype=dtype))
-
-class MaskTile(PClass):
-    alpha = field(initial=np.zeros(TILE_SIZE + (1,), dtype=dtype))
-
-class Mask(PClass):
-    visible = field(initial=True)
-    position = field(initial=(0.0, 0.0))
-    tiles = field(initial=pmap())
-
-class BaseLayer(PClass):
-    name = field(initial="")
-    blend_mode = field(initial=BlendMode.NORMAL)
-    opacity = field(initial=255)
-    lock_alpha = field(initial=False)
-    lock_draw = field(initial=False)
-    lock_move = field(initial=False)
-    lock_all = field(initial=False)
-    clip = field(initial=False)
-    mask = field(initial=None)
-
-class PixelLayer(BaseLayer):
-    position = field(initial=(0.0, 0.0))
-    tiles = field(initial=pmap())
-
-class FillLayer(BaseLayer):
-    color = field(initial=np.ones(4, dtype=dtype))
-
-class GroupLayer(BaseLayer):
-    layers = field(initial=pvector())
-
-class Selection(PClass):
-    mask_position = field(initial=(0.0, 0.0))
-    mask_tiles = field(initial=pmap())
-
-class Canvas(PClass):
-    selection = field(type=optional(Selection), initial=None)
-    top_level = field(initial=GroupLayer())
-    size = field(initial=(0, 0))
+    def on_copy(self):
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setText(self.text)
 
 class CanvasState():
-    def __init__(self, initial_state, file_name, file_dir=None):
-        self.file_name = file_name
-        self.file_dir = file_dir
+    def __init__(self, initial_state, file_path, on_filesystem):
+        self.file_path = file_path
+        self.on_filesystem = on_filesystem
         self.current_index = 0
         self.saved_state = initial_state
-        self.states = pdeque([initial_state])
+        self.selected_objects = []
+        self.states = deque([initial_state])
 
     def get_current(self):
         return self.states[self.current_index]
@@ -228,49 +179,6 @@ class LayerList(QWidget):
     def __init__(self, parent) -> None:
         super().__init__(parent)
 
-def pixel_data_to_tiles(data:np.ndarray):
-    tiles = []
-    for (size, offset) in generate_tiles(data.shape[:2], TILE_SIZE):
-        tile = np.zeros(shape=size + data.shape[2:])
-        blit(tile, data, -np.array(offset))
-        tiles.append((offset, tile))
-    return tiles
-
-def scalar_to_tiles(value, shape):
-    tiles = []
-    for (size, offset) in generate_tiles(shape, TILE_SIZE):
-        tiles.append((offset, value))
-    return tiles
-
-def color_alpha_to_tiles(color:np.ndarray, alpha):
-    color_tiles = pixel_data_to_tiles(color)
-    if np.isscalar(alpha):
-        alpha_tiles = scalar_to_tiles(alpha, color.shape[:2])
-    else:
-        alpha_tiles = pixel_data_to_tiles(alpha)
-    tiles = {}
-    for (offset, c), (_, a) in zip(color_tiles, alpha_tiles):
-        tiles[offset] = Tile(color=c, alpha=a)
-    return pmap(tiles)
-
-def open_file(file_name:Path):
-    data = cv2.imread(str(file_name), cv2.IMREAD_UNCHANGED)
-    if data is None:
-        return None
-
-    if data.shape[2] == 3:
-        color = cv2.cvtColor(data, cv2.COLOR_BGR2RGB).astype(dtype) / 255.0
-        alpha = 1.0
-    else:
-        data = cv2.cvtColor(data, cv2.COLOR_BGRA2RGBA).astype(dtype) / 255.0
-        color, alpha = np.split(data, [2], axis=2)
-    data = None
-
-    p = PixelLayer(name="Layer1", tiles=color_alpha_to_tiles(color, alpha))
-    top_level = GroupLayer(layers=pvector([p]))
-    canvas = Canvas(top_level=top_level, size=color.shape[:2])
-    return CanvasState(canvas, file_name.name, file_name.parent)
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -294,36 +202,81 @@ class MainWindow(QMainWindow):
 
     def on_open(self):
         files, filter = QFileDialog.getOpenFileNames(self, caption='Open', filter='All files (*.*)', dir='.')
-        for file in files:
-            # TODO check if file is already open and ask to reopen.
+        for file_path in files:
+            # TODO check if file is already open and ask to reopen without saving.
 
-            canvas_state = open_file(Path(file))
-            if canvas_state is None:
-                QErrorMessage(self).showMessage(f'Could not open file: {file}')
-            else:
-                viewport = Viewport(canvas_state)
-                self.viewports.append(viewport)
-                self.viewport_tab.addTab(viewport, viewport.canvas_state.file_name)
+            file_path = Path(file_path)
+            file_type = file_path.suffix
+            try:
+                if file_type in ['.psd', '.psb']:
+                    canvas = psd.read(file_path)
+                elif file_type == '.crow':
+                    canvas = native.read(file_path)
+                else:
+                    canvas = image.read(file_path)
+            except Exception as ex:
+                logging.exception(ex)
+                QErrorMessage(self).showMessage(str(ex))
+                return
+
+            canvas_state = CanvasState(
+                initial_state=canvas,
+                file_path=file_path,
+                on_filesystem=True
+            )
+            viewport = Viewport(canvas_state)
+            self.viewports.append(viewport)
+            self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
+
+    def on_save(self):
+        pass
+
+    def on_save_as(self):
+        pass
+
+    def on_close(self):
+        pass
+
+    def create_menu_action(self, menu:QMenu, text:str, callback, enabled=True):
+        action = QAction(text=text, parent=self)
+        action.triggered.connect(callback)
+        menu.addAction(action)
+        return action
 
     def create_menus(self):
         menu = self.menuBar()
-        file_menu = menu.addMenu('&File')
+        menu_file = menu.addMenu('&File')
 
-        new_action = QAction(text='&New ...', parent=self)
-        new_action.triggered.connect(self.on_new)
-        file_menu.addAction(new_action)
+        self.action_new = self.create_menu_action(menu_file, '&New ...', self.on_new)
+        self.action_open = self.create_menu_action(menu_file, '&Open ...', self.on_open)
+        self.action_save = self.create_menu_action(menu_file, '&Save ...', self.on_save)
+        self.action_save_as = self.create_menu_action(menu_file, 'Save &As ...', self.on_save_as)
+        self.action_close = self.create_menu_action(menu_file, '&Close ...', self.on_close)
 
-        open_action = QAction(text='&Open ...', parent=self)
-        open_action.triggered.connect(self.on_open)
-        file_menu.addAction(open_action)
+        menu_edit = menu.addMenu('&Edit')
+        menu_canvas = menu.addMenu('&Canvas')
+        menu_layer = menu.addMenu('&Layer')
+        menu_selection = menu.addMenu('&Selection')
+        self.menu_view = menu.addMenu('&View')
+        menu_window = menu.addMenu('&Window')
+
+def init_logging():
+    logging.basicConfig(
+        format='[%(asctime)s][%(levelname)s] %(message)s',
+        level=logging.INFO
+    )
 
 def main():
+    init_logging()
     app = QApplication(sys.argv)
-
-    widget = MainWindow()
-    widget.show()
-
-    sys.exit(app.exec())
+    main_window = MainWindow()
+    def excepthook(exc_type, exc_value, exc_tb):
+        tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        logging.exception(tb)
+        ExtendedInfoMessage(title='Error', text=tb).exec()
+    sys.excepthook = excepthook
+    main_window.show()
+    QtAsyncio.run()
 
 if __name__ == "__main__":
     main()

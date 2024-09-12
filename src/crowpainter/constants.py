@@ -1,4 +1,8 @@
 from enum import Enum, auto
+import numpy as np
+
+TILE_SIZE = (256, 256)
+DTYPE = np.float64
 
 class BlendMode(Enum):
     PASS = auto
