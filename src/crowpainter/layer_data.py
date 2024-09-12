@@ -45,6 +45,9 @@ class Mask(SelectableObject):
     def get_mask_data(self, target_alpha_buffer:np.ndarray, target_offset:IVec2):
         return get_overlap_regions(self.alpha, self.position, target_alpha_buffer, target_offset)
 
+    def thaw(self):
+        return self.set(alpha=thaw(self.alpha))
+
 class BaseLayer(SelectableObject):
     name:str = field(initial="")
     blend_mode:BlendMode = field(initial=BlendMode.NORMAL)
