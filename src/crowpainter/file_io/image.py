@@ -22,7 +22,7 @@ def read(file_path:Path) -> Canvas:
     layer = PixelLayer(
         name="Layer1",
         color=color_tiles,
-        alpha=alpha_tiles
+        alpha=alpha_tiles,
     )
     return Canvas(
         top_level=GroupLayer(layers=pvector([layer])),

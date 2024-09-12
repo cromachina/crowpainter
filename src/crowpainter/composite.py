@@ -30,7 +30,7 @@ async def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:t
         blend_mode = sublayer.blend_mode
 
         if isinstance(sublayer, GroupLayer):
-            if blend_mode == BlendMode.PASS_THROUGH:
+            if blend_mode == BlendMode.PASS:
                 next_backdrop = (color_dst, alpha_dst)
             else:
                 next_color = np.zeros_like(color_dst)
@@ -41,7 +41,7 @@ async def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:t
         elif isinstance(sublayer, PixelLayer):
             pixel_srcs = sublayer.get_pixel_data(color_dst, alpha_dst, offset)
 
-        opacity = sublayer.opacity / 100.0
+        opacity = sublayer.opacity
 
         for (sub_offset, ((sub_color_dst, sub_color_src), (sub_alpha_dst, sub_alpha_src))) in pixel_srcs.items():
             sub_masks = sublayer.get_mask_data(sub_alpha_dst, sub_offset)
@@ -52,7 +52,7 @@ async def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:t
 
             # A pass-through layer has already been blended, so just lerp instead.
             # NOTE: Clipping layers do not apply to pass layers, as if clipping were simply disabled.
-            if blend_mode == BlendMode.PASS_THROUGH:
+            if blend_mode == BlendMode.PASS:
                 if mask_src is None:
                     mask_src = opacity
                 else:
@@ -68,6 +68,8 @@ async def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:t
                     # Un-multiply group composites so that we can multiply group opacity correctly
                     sub_color_src = blendfuncs.clip_divide(sub_color_src, sub_alpha_src, out=check_lock(sub_color_src))
 
+                # TODO: Figure out how to do clip layers without reorganizing the layer substructure.
+                # Could keep the alpha source of the previous sublayer
                 if sublayer.clip_layers:
                     # Composite the clip layers now. This basically overwrites just the color by blending onto it without
                     # alpha blending it first. For whatever reason, applying a large root to the alpha source before passing
@@ -81,7 +83,7 @@ async def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:t
                 sub_alpha_src = np.multiply(sub_alpha_src, opacity, out=check_lock(sub_alpha_src))
 
                 # Now we can 'premultiply' the color_src for the main blend operation.
-                sub_color_src = np.multiply(sub_color_src, sub_alpha_src, out=check_lock(color_src))
+                sub_color_src = np.multiply(sub_color_src, sub_alpha_src, out=check_lock(sub_color_src))
 
                 # Run the blend operation.
                 blend_func = blendfuncs.get_blend_func(blend_mode)

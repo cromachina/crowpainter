@@ -42,7 +42,7 @@ class ExtendedInfoMessage(QDialog):
         clipboard.setText(self.text)
 
 class CanvasState():
-    def __init__(self, initial_state, file_path, on_filesystem):
+    def __init__(self, initial_state:layer_data.Canvas, file_path:Path, on_filesystem:bool):
         self.file_path = file_path
         self.on_filesystem = on_filesystem
         self.current_index = 0
@@ -81,7 +81,7 @@ class CanvasState():
 
 def np_to_qimage(img):
     h, w, _ = img.shape
-    return QImage(img, w, h, 3 * w, QImage.Format.Format_RGB888)
+    return QImage(img, w, h, 3 * w, QImage.Format.Format_RGBA64 .Format_RGB888)
 
 def make_pyramid(image):
     pyramid = [image]
@@ -114,8 +114,6 @@ class Viewport(QGraphicsView):
         self.setTabletTracking(True)
         self.setSceneRect(QRect(-1000000, -1000000, 2000000, 2000000))
 
-        self.reset_viewport()
-
     # NOTE: opencv seems to resolve resizing adqeuately, but rotations still look like crap.
     # might create a custom 'framebuffer' to render nicely myself
     def apply_transform(self):
@@ -128,19 +126,21 @@ class Viewport(QGraphicsView):
             h, w, _ = self.image.shape
             img = cv2.resize(self.image, (int(w * self.zoom), int(h * self.zoom)), interpolation=cv2.INTER_AREA)
             qim = np_to_qimage(img)
-
             self.pixmap = QGraphicsPixmapItem(QPixmap(qim))
             self.pixmap.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
             self.scene().clear()
             self.scene().addItem(self.pixmap)
         self.setTransform(t)
 
-    def reset_viewport(self):
+    async def reset_viewport(self):
         self.scene().clear()
         canvas = self.canvas_state.get_current()
-        h, w = canvas.size
-        self.image = canvas.top_level.layers[0].tiles
-
+        color = np.zeros(canvas.size + (3,), dtype=DTYPE)
+        alpha = np.zeros(canvas.size + (1,), dtype=DTYPE)
+        color, alpha = await composite.composite(canvas.top_level, (0, 0), (color, alpha))
+        color *= 255
+        color = color.astype(np.ubyte)
+        self.image = color
         self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(self.image)))
         self.scene().addItem(self.pixmap)
 
@@ -200,8 +200,8 @@ class MainWindow(QMainWindow):
     def on_new(self):
         pass
 
-    def on_open(self):
-        files, filter = QFileDialog.getOpenFileNames(self, caption='Open', filter='All files (*.*)', dir='.')
+    async def on_open(self):
+        files, _ = QFileDialog.getOpenFileNames(self, caption='Open', filter='All files (*.*)', dir='.')
         for file_path in files:
             # TODO check if file is already open and ask to reopen without saving.
 
@@ -227,6 +227,7 @@ class MainWindow(QMainWindow):
             viewport = Viewport(canvas_state)
             self.viewports.append(viewport)
             self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
+            await viewport.reset_viewport()
 
     def on_save(self):
         pass
@@ -248,7 +249,7 @@ class MainWindow(QMainWindow):
         menu_file = menu.addMenu('&File')
 
         self.action_new = self.create_menu_action(menu_file, '&New ...', self.on_new)
-        self.action_open = self.create_menu_action(menu_file, '&Open ...', self.on_open)
+        self.action_open = self.create_menu_action(menu_file, '&Open ...', lambda: asyncio.ensure_future(self.on_open()))
         self.action_save = self.create_menu_action(menu_file, '&Save ...', self.on_save)
         self.action_save_as = self.create_menu_action(menu_file, 'Save &As ...', self.on_save_as)
         self.action_close = self.create_menu_action(menu_file, '&Close ...', self.on_close)
