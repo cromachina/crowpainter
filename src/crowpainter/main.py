@@ -224,18 +224,21 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('CrowPainter')
         self.setGeometry(0, 0, 1000, 1000)
         self.create_menus()
-
         self.canvases = []
         self.viewports = []
-
-        #self.setCentralWidget(viewport)
-        #self.layout().addChildWidget(viewport)
         self.viewport_tab = QTabWidget(self)
+        self.viewport_tab.setTabsClosable(True)
+        self.viewport_tab.tabCloseRequested.connect(self.on_tab_close_requested)
         self.setCentralWidget(self.viewport_tab)
         self.dock = QDockWidget()
         self.dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         statusbar = StatusBar()
         self.setStatusBar(statusbar)
+
+    def on_tab_close_requested(self, index):
+        widget = self.viewport_tab.widget(index)
+        widget.close()
+        self.viewport_tab.removeTab(index)
 
     def on_new(self):
         pass
