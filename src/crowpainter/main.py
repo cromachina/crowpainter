@@ -182,6 +182,42 @@ class LayerList(QWidget):
     def __init__(self, parent) -> None:
         super().__init__(parent)
 
+class StatusBar(QStatusBar):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.system_memory_bar = QProgressBar()
+        self.own_memory_bar = QProgressBar()
+        self.disk_bar = QProgressBar()
+        self.system_memory_bar.setMaximumWidth(100)
+        self.own_memory_bar.setMaximumWidth(100)
+        self.disk_bar.setMaximumWidth(100)
+        self.system_memory_bar.setTextVisible(False)
+        self.own_memory_bar.setStyleSheet('background-color: rgba(0,0,0,0);')
+        layout = QStackedLayout()
+        layout.addWidget(self.system_memory_bar)
+        layout.addWidget(self.own_memory_bar)
+        layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        stack = QWidget()
+        stack.setMaximumWidth(100)
+        stack.setLayout(layout)
+        self.addPermanentWidget(QLabel(text='Memory Usage'))
+        self.addPermanentWidget(stack)
+        self.addPermanentWidget(QLabel(text='Disk Usage'))
+        self.addPermanentWidget(self.disk_bar)
+        self.update_timer = QTimer(self)
+        self.update_timer.setInterval(1000)
+        self.update_timer.timeout.connect(self.update_status)
+        self.update_timer.start()
+        self.update_status()
+
+    def update_status(self):
+        stats = util.get_system_stats()
+        self.own_memory_bar.setValue(stats.own_memory_usage)
+        self.own_memory_bar.setFormat(f'{stats.own_memory_usage}% ({stats.system_memory_usage}%)')
+        self.system_memory_bar.setValue(stats.system_memory_usage)
+        self.disk_bar.setValue(stats.disk_usage)
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -191,7 +227,6 @@ class MainWindow(QMainWindow):
 
         self.canvases = []
         self.viewports = []
-        self.active_viewport = None
 
         #self.setCentralWidget(viewport)
         #self.layout().addChildWidget(viewport)
@@ -199,6 +234,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.viewport_tab)
         self.dock = QDockWidget()
         self.dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        statusbar = StatusBar()
+        self.setStatusBar(statusbar)
 
     def on_new(self):
         pass
