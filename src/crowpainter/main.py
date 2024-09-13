@@ -235,7 +235,8 @@ class MainWindow(QMainWindow):
         viewport = Viewport(canvas_state)
         await viewport.reset_viewport()
         self.viewports.append(viewport)
-        self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
+        index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
+        self.viewport_tab.setCurrentIndex(index)
 
     def create_menu_action(self, menu:QMenu, text:str, callback, enabled=True):
         action = QAction(text=text, parent=self)
