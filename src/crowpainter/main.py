@@ -80,7 +80,7 @@ class CanvasState():
 
 def np_to_qimage(img):
     h, w, _ = img.shape
-    return QImage(img, w, h, 3 * w, QImage.Format.Format_RGBA64 .Format_RGB888)
+    return QImage(img, w, h, 3 * w, QImage.Format.Format_RGB888)
 
 def make_pyramid(image):
     pyramid = [image]
@@ -88,52 +88,114 @@ def make_pyramid(image):
         pyramid.append(cv2.resize(pyramid[-1], dsize=None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA))
     return pyramid
 
+# Only allow specific zoom levels, otherwise the view result might look like crap.
+scroll_zoom_levels = [2 ** (x / 4) for x in range(-28, 22)]
+default_zoom_level = 28
+
+def scale(scale):
+    return np.array([
+        [scale, 0, 0],
+        [0, scale, 0],
+        [0, 0, 1],
+    ], np.float64)
+
+def rotate(angle):
+    r = np.deg2rad(angle)
+    cr = np.cos(r)
+    sr = np.sin(r)
+    return np.array([
+        [cr, -sr, 0],
+        [sr, cr, 0],
+        [0, 0, 1],
+    ], np.float64)
+
+def translate(dx, dy):
+    return np.array([
+        [1, 0, dx],
+        [0, 1, dy],
+        [0, 0, 1],
+    ], np.float64)
+
+def multiply(*matrices):
+    result = np.identity(3, np.float64)
+    for m in reversed(matrices):
+        np.matmul(result, m, result)
+    return result
+
+def matrix_to_QTransform(matrix:np.ndarray) -> QTransform:
+    m = matrix.T
+    t = QTransform().setMatrix(m[0,0], m[0,1], m[0,2], m[1,0], m[1,1], m[1,2], m[2,0], m[2,1], m[2,2])
+    return t
+
 class Viewport(QGraphicsView):
     '''Display a canvas and handle input events for it.'''
     def __init__(self, canvas_state:CanvasState, parent=None):
         super().__init__(parent)
         self.position = QPointF(0.0, 0.0)
-        self.zoom = 1.0
-        self.last_zoom = self.zoom
+        self.zoom = default_zoom_level
         self.rotation = 0.0
         self.canvas_state = canvas_state
-        self.composite = None
-        self.pyramid = None
-
-        self.image:QImage = None
+        self.composite_image:np.ndaraay = None
         self.last_mouse_pos = QPointF(0, 0)
         self.moving_view = False
         self.setScene(QGraphicsScene())
-        self.setBackgroundBrush(QColor(176, 176, 176))
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.horizontalScrollBar().disconnect(self)
         self.verticalScrollBar().disconnect(self)
         self.setMouseTracking(True)
         self.setTabletTracking(True)
-        self.setSceneRect(QRect(-1000000, -1000000, 2000000, 2000000))
 
-    # NOTE: opencv seems to resolve resizing adqeuately, but rotations still look like crap.
-    # might create a custom 'framebuffer' to render nicely myself
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.apply_transform()
+
+    # TODO: Experiment with tiled pixmaps to help Qt optimize rendering.
     def apply_transform(self):
-        t = QTransform().translate(self.position.x(), self.position.y()).rotate(self.rotation)
-        if self.zoom > 1.0:
-            t = t.scale(self.zoom, self.zoom)
-            self.pixmap.setTransformationMode(Qt.TransformationMode.FastTransformation)
-        elif self.zoom != self.last_zoom:
-            self.last_zoom = self.zoom
-            h, w, _ = self.image.shape
-            img = cv2.resize(self.image, (int(w * self.zoom), int(h * self.zoom)), interpolation=cv2.INTER_AREA)
-            qim = np_to_qimage(img)
-            self.pixmap = QGraphicsPixmapItem(QPixmap(qim))
+        size = self.size()
+        view_h = size.height()
+        view_w = size.width()
+        view_x = self.position.x()
+        view_y = self.position.y()
+        image_x = self.composite_image.shape[1]
+        image_y = self.composite_image.shape[0]
+        target_buffer = np.empty((view_h, view_w, 3), dtype=np.ubyte)
+        zoom = scroll_zoom_levels[self.zoom]
+        # TODO panning is correct, but zoom and rotation happens about the center of the pic
+        # instead of the center of the screen.
+
+        # For small scale we use resize and Qt transforms to move the view around.
+        if zoom < 1:
+            img = cv2.resize(self.composite_image, dsize=None, fx=zoom, fy=zoom, interpolation=cv2.INTER_AREA)
+            self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(img)))
             self.pixmap.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
             self.scene().clear()
             self.scene().addItem(self.pixmap)
-        self.setTransform(t)
+            t = (QTransform()
+                .translate(view_x, view_y)
+                .rotate(self.rotation)
+                .translate(-img.shape[1] / 2, -img.shape[0] / 2)
+            )
+            self.pixmap.setTransform(t)
+        # For large scale, we transform into a fixed pixmap
+        else:
+            matrix = multiply(
+                translate(-image_x / 2, -image_y / 2),
+                rotate(self.rotation),
+                scale(zoom),
+                translate(view_x, view_y),
+                translate(view_w / 2, view_h / 2),
+            )[:2]
+            cv2.warpAffine(self.composite_image, matrix, dsize=(view_w, view_h), dst=target_buffer, flags=cv2.INTER_AREA)
+            self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(target_buffer)))
+            self.scene().clear()
+            self.scene().addItem(self.pixmap)
+            self.pixmap.setTransform(QTransform().translate(-view_w / 2, -view_h / 2))
 
     async def reset_viewport(self):
         self.scene().clear()
         canvas = self.canvas_state.get_current()
+        # TODO: Test dispatching parallel tile workers.
         def comp_runner():
             size = canvas.size
             offset = (0, 0)
@@ -143,25 +205,27 @@ class Viewport(QGraphicsView):
             color *= 255
             color = color.astype(np.ubyte)
             return color
-        self.image = await util.peval(comp_runner)
-        self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(self.image)))
-        self.scene().addItem(self.pixmap)
+        self.composite_image = await util.peval(comp_runner)
+        self.apply_transform()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.angleDelta().y() > 0:
-            self.zoom *= 1.1
+            self.zoom += 1
         else:
-            self.zoom /= 1.1
-        self.zoom = max(self.zoom, 0.0078)
-        self.zoom = min(self.zoom, 32.0)
+            self.zoom -= 1
+        self.zoom = max(self.zoom, 0)
+        self.zoom = min(self.zoom, len(scroll_zoom_levels)-1)
         self.apply_transform()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_BracketLeft:
-            self.rotation += 15
-        elif event.key() == Qt.Key.Key_BracketRight:
             self.rotation -= 15
-        self.apply_transform()
+            self.rotation %= 360
+            self.apply_transform()
+        elif event.key() == Qt.Key.Key_BracketRight:
+            self.rotation += 15
+            self.rotation %= 360
+            self.apply_transform()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == event.button().LeftButton:
@@ -276,7 +340,7 @@ class MainWindow(QMainWindow):
         )
         viewport = Viewport(canvas_state)
         await viewport.reset_viewport()
-        self.viewports.append(viewport)
+        #self.viewports.append(viewport)
         index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
         self.viewport_tab.setCurrentIndex(index)
 
