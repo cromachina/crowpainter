@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import psutil
 import numpy as np
+from pyrsistent import *
 
 worker_count = psutil.cpu_count(False)
 pool = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix='WorkerThread')
@@ -67,3 +68,23 @@ def blit(dst, src, offset):
 
 def bit(number, bit):
     return bool(number & (1 << bit))
+
+class SystemStats(PRecord):
+    own_memory_usage:int = field()
+    system_memory_usage:int = field()
+    disk_usage:int = field()
+
+def get_system_stats():
+    mem_stats = psutil.virtual_memory()
+    system_total = mem_stats.total
+    disk_total = 1
+    disk_used = 0
+    for mountpoint in {p.device:p.mountpoint for p in psutil.disk_partitions()}.values():
+        usage = psutil.disk_usage(mountpoint)
+        disk_total += usage.total
+        disk_used += usage.used
+    return SystemStats(
+        own_memory_usage = int(psutil.Process().memory_info().rss / system_total * 100),
+        system_memory_usage = int(mem_stats.percent),
+        disk_usage = int(disk_used / disk_total * 100),
+    )
