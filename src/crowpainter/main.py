@@ -244,7 +244,9 @@ class MainWindow(QMainWindow):
         pass
 
     async def on_open(self):
-        files, _ = QFileDialog.getOpenFileNames(self, caption='Open', filter='All files (*.*)', dir='.')
+        image_types = ['png', 'psd', 'psb', 'tif', 'tiff', 'jpg', 'jpeg', 'jpe', 'webp', 'bmp', 'dib', 'jp2', 'pbm', 'pgm', 'ppm', 'pnm']
+        image_format_str = ' '.join([f'*.{ext}' for ext in image_types])
+        files, _ = QFileDialog.getOpenFileNames(self, caption='Open', filter=f'Images ({image_format_str});;All files (*.*)', dir='.')
         for file_path in files:
             # TODO check if file is already open and ask to reopen without saving.
             await self.open(file_path)
