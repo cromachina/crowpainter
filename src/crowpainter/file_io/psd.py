@@ -85,17 +85,17 @@ def _get_base_layer_properties(layer:psdl.Layer):
     opacity, blend_mode = _get_sai_special_mode_opacity(layer)
     lock_alpha, lock_draw, lock_move, lock_all = _get_protection_settings(layer)
     return {
-        'name':layer.name,
-        'blend_mode':blend_mode,
-        'visible':layer.visible,
-        'opacity':opacity,
-        'lock_alpha':lock_alpha,
-        'lock_draw':lock_draw,
-        'lock_move':lock_move,
-        'lock_all':lock_all,
-        'clip':layer.clipping_layer,
-        'clip_layers':None,
-        'mask':_get_mask(layer),
+        'name': layer.name,
+        'blend_mode': blend_mode,
+        'visible': layer.visible,
+        'opacity': opacity,
+        'lock_alpha': lock_alpha,
+        'lock_draw': lock_draw,
+        'lock_move': lock_move,
+        'lock_all': lock_all,
+        'clip': layer.clipping_layer,
+        'clip_layers': None,
+        'mask': _get_mask(layer),
     }
 
 def _get_group_layer_properties(layer:psdl.Layer):
@@ -104,9 +104,12 @@ def _get_group_layer_properties(layer:psdl.Layer):
     }
 
 def _get_pixel_layer_properties(layer:psdl.Layer):
+    color, alpha = prune_tiles(
+        _get_layer_channel(layer, 'color'),
+        _get_layer_channel(layer, 'shape'))
     return {
-        'color': _get_layer_channel(layer, 'color'),
-        'alpha': _get_layer_channel(layer, 'shape'),
+        'color': color,
+        'alpha': alpha,
         'position': (layer.top, layer.left),
     }
 

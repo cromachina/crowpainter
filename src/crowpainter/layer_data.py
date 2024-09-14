@@ -124,7 +124,7 @@ def get_overlap_regions(tiles:PMap[IVec2, BaseTile], tiles_offset:IVec2, target_
                 regions[tuple(tile_index)] = overlap_tiles
     return regions
 
-def pixel_data_to_tiles(data:np.ndarray, tile_constructor):
+def pixel_data_to_tiles(data:np.ndarray | None, tile_constructor):
     if data is None:
         return pmap()
     tiles = {}
@@ -143,6 +143,17 @@ def scalar_to_tiles(value, shape, tile_constructor):
         index = tuple(np.array(offset) // TILE_SIZE)
         tiles[index] = tile_constructor(data=tile)
     return pmap(tiles)
+
+def prune_tiles(color_tiles:PMap[IVec2, ColorTile], alpha_tiles:PMap[IVec2, AlphaTile]):
+    new_color_tiles = {}
+    new_alpha_tiles = {}
+    for index,color_tile in color_tiles.items():
+        alpha_tile = alpha_tiles.get(index)
+        if alpha_tile is None or alpha_tile.data.any():
+            new_color_tiles[index] = color_tile
+            if alpha_tile is not None:
+                new_alpha_tiles[index] = alpha_tile
+    return pmap(new_color_tiles), pmap(new_alpha_tiles)
 
 def color_alpha_to_tiles(color:np.ndarray, alpha:float | np.ndarray):
     color_tiles = pixel_data_to_tiles(color, ColorTile)
