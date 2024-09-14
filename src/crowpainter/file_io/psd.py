@@ -76,7 +76,7 @@ def _get_mask(layer:psdl.Layer):
             position=(layer.mask.top, layer.mask.left),
             alpha=_get_layer_channel(layer, 'mask'),
             visible=not layer.mask.disabled,
-            background_color=layer.background_color,
+            background_color=layer.mask.background_color,
         )
     else:
         return None

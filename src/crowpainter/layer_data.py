@@ -44,10 +44,11 @@ class Mask(SelectableObject):
     visible:bool = field(initial=True)
     background_color:STORAGE_DTYPE = field(initial=0)
 
-    # TODO if mask data partially covers target buffer, then it needs to be blitted onto the background color
-    # to completely fill the area of the target buffer.
     def get_mask_data(self, target_alpha_buffer:np.ndarray, target_offset:IVec2):
-        return get_overlap_regions(self.alpha, self.position, target_alpha_buffer, target_offset)
+        mask = np.full(target_alpha_buffer.shape, self.background_color)
+        for region in get_overlap_regions(self.alpha, self.position, mask, target_offset).values():
+            np.copyto(*region)
+        return mask
 
     def thaw(self):
         return self.set(alpha=thaw(self.alpha))
@@ -128,7 +129,8 @@ def get_overlap_regions(tiles:PMap[IVec2, BaseArrayTile | FillTile], tiles_offse
                 overlap_tiles = util.get_overlap_tiles(target_buffer, region.data, tuple(region_offset))
             overlap_shape = overlap_tiles[0].shape[:2]
             if overlap_shape[0] != 0 and overlap_shape[1] != 0:
-                regions[tuple(tile_index)] = overlap_tiles
+                absolute_offset = np.array(target_offset) + region_offset
+                regions[tuple(absolute_offset)] = overlap_tiles
     return regions
 
 def pixel_data_to_tiles(data:np.ndarray | None, tile_constructor):

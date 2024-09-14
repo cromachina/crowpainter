@@ -39,7 +39,10 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
 
         if isinstance(sublayer, GroupLayer):
             if blend_mode == BlendMode.PASS:
-                next_backdrop = (color_dst, alpha_dst)
+                if sublayer.mask is None:
+                    next_backdrop = (color_dst, alpha_dst)
+                else:
+                    next_backdrop = (color_dst.copy(), alpha_dst.copy())
             else:
                 next_color = np.zeros_like(color_dst)
                 next_alpha = np.zeros_like(alpha_dst)
@@ -54,11 +57,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
         for (sub_offset, ((sub_color_dst, sub_color_src), (sub_alpha_dst, sub_alpha_src))) in pixel_srcs.items():
             sub_color_src = to_blending_type(sub_color_src)
             sub_alpha_src = to_blending_type(sub_alpha_src)
-            sub_masks = sublayer.get_mask_data(sub_alpha_dst, sub_offset)
-            if sub_masks is None:
-                mask_src = None
-            else:
-                mask_src = sub_masks.get(sub_offset)
+            mask_src = sublayer.get_mask_data(sub_alpha_dst, sub_offset)
             mask_src = to_blending_type(mask_src)
 
             # A pass-through layer has already been blended, so just lerp instead.
@@ -67,7 +66,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
                 if mask_src is None:
                     mask_src = opacity
                 else:
-                    mask_src = np.multiply(mask_src, opacity)
+                    np.multiply(mask_src, opacity, out=mask_src)
                 blendfuncs.lerp(sub_color_dst, sub_color_src, mask_src, out=sub_color_dst)
                 blendfuncs.lerp(sub_alpha_dst, sub_alpha_src, mask_src, out=sub_alpha_dst)
             else:
