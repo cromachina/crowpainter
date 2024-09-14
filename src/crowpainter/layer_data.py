@@ -113,7 +113,7 @@ class Canvas(PClass):
             selection=self.selection.thaw() if self.selection is not None else None
         )
 
-def get_overlap_regions(tiles:PMap[IVec2, BaseArrayTile], tiles_offset:IVec2, target_buffer:np.ndarray, target_offset:IVec2) -> dict[IVec2, tuple[np.ndarray, np.ndarray]]:
+def get_overlap_regions(tiles:PMap[IVec2, BaseArrayTile | FillTile], tiles_offset:IVec2, target_buffer:np.ndarray, target_offset:IVec2) -> dict[IVec2, tuple[np.ndarray, np.ndarray | STORAGE_DTYPE]]:
     regions = dict()
     relative_offset = np.array(tiles_offset) - np.array(target_offset)
     for point in util.generate_points(target_buffer.shape[:2], TILE_SIZE):
