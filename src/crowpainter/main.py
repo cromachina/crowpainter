@@ -92,6 +92,15 @@ def make_pyramid(image):
 scroll_zoom_levels = [2 ** (x / 4) for x in range(-28, 22)]
 default_zoom_level = 28
 
+def find_fitting_zoom_level(view, image):
+    best_fit = 0
+    for index, zoom in zip(range(len(scroll_zoom_levels)), scroll_zoom_levels):
+        if image * zoom < view:
+            best_fit = index
+        else:
+            break
+    return best_fit
+
 def scale(scale):
     return np.array([
         [scale, 0, 0],
@@ -127,15 +136,28 @@ def matrix_to_QTransform(matrix:np.ndarray) -> QTransform:
     t = QTransform().setMatrix(m[0,0], m[0,1], m[0,2], m[1,0], m[1,1], m[1,2], m[2,0], m[2,1], m[2,2])
     return t
 
+async def full_composite(canvas:layer_data.Canvas):
+    # TODO: Test dispatching parallel tile workers.
+    def comp_runner():
+        size = canvas.size
+        offset = (0, 0)
+        color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
+        alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
+        color, _ = composite.composite(canvas.top_level, offset, (color, alpha))
+        color *= 255
+        color = color.astype(STORAGE_DTYPE)
+        return color
+    return await util.peval(comp_runner)
+
 class Viewport(QGraphicsView):
     '''Display a canvas and handle input events for it.'''
-    def __init__(self, canvas_state:CanvasState, parent=None):
+    def __init__(self, canvas_state:CanvasState, initial_composite=None, parent=None):
         super().__init__(parent)
-        self.position = QPointF(0.0, 0.0)
+        self.position = QPointF()
         self.zoom = default_zoom_level
         self.rotation = 0.0
         self.canvas_state = canvas_state
-        self.composite_image:np.ndaraay = None
+        self.composite_image:np.ndarray = initial_composite
         self.last_mouse_pos = QPointF(0, 0)
         self.moving_view = False
         self.setScene(QGraphicsScene())
@@ -146,10 +168,7 @@ class Viewport(QGraphicsView):
         self.setMouseTracking(True)
         self.setTabletTracking(True)
         self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.apply_transform()
+        self.first_show = True
 
     # TODO: Experiment with tiled pixmaps to help Qt optimize rendering.
     def apply_transform(self):
@@ -197,21 +216,30 @@ class Viewport(QGraphicsView):
             self.scene().clear()
             self.scene().addItem(self.pixmap)
 
-    async def reset_viewport(self):
-        self.scene().clear()
-        canvas = self.canvas_state.get_current()
-        # TODO: Test dispatching parallel tile workers.
-        def comp_runner():
-            size = canvas.size
-            offset = (0, 0)
-            color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
-            alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
-            color, _ = composite.composite(canvas.top_level, offset, (color, alpha))
-            color *= 255
-            color = color.astype(STORAGE_DTYPE)
-            return color
-        self.composite_image = await util.peval(comp_runner)
+    def fit_canvas_in_view(self):
+        self.position = QPointF()
+        size = self.size()
+        view_h = size.height()
+        view_w = size.width()
+        image_h, image_w = self.composite_image.shape[:2]
+        if image_h < view_h and image_w < view_w:
+            self.zoom = default_zoom_level
+        else:
+            z_h = find_fitting_zoom_level(view_h, image_h)
+            z_w = find_fitting_zoom_level(view_w, image_w)
+            self.zoom = min(z_h, z_w)
+        self.rotation = 0
         self.apply_transform()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.apply_transform()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.first_show:
+            self.first_show = False
+            self.fit_canvas_in_view()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.angleDelta().y() > 0:
@@ -223,11 +251,13 @@ class Viewport(QGraphicsView):
         self.apply_transform()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_R:
+            self.fit_canvas_in_view()
         if event.key() == Qt.Key.Key_BracketLeft:
             self.rotation -= 15
             self.rotation %= 360
             self.apply_transform()
-        elif event.key() == Qt.Key.Key_BracketRight:
+        if event.key() == Qt.Key.Key_BracketRight:
             self.rotation += 15
             self.rotation %= 360
             self.apply_transform()
@@ -343,9 +373,8 @@ class MainWindow(QMainWindow):
             file_path=file_path,
             on_filesystem=True
         )
-        viewport = Viewport(canvas_state)
-        await viewport.reset_viewport()
-        #self.viewports.append(viewport)
+        composite_image = await full_composite(canvas)
+        viewport = Viewport(canvas_state=canvas_state, initial_composite=composite_image)
         index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
         self.viewport_tab.setCurrentIndex(index)
 
