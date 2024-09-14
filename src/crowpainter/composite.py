@@ -39,10 +39,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
 
         if isinstance(sublayer, GroupLayer):
             if blend_mode == BlendMode.PASS:
-                if sublayer.mask is None:
-                    next_backdrop = (color_dst, alpha_dst)
-                else:
-                    next_backdrop = (color_dst.copy(), alpha_dst.copy())
+                next_backdrop = (color_dst.copy(), alpha_dst.copy())
             else:
                 next_color = np.zeros_like(color_dst)
                 next_alpha = np.zeros_like(alpha_dst)
