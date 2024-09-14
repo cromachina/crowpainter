@@ -21,21 +21,20 @@ class ExtendedInfoMessage(QDialog):
     def __init__(self, parent=None, title='', text=''):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.text = text
-        copy_button = QPushButton(text='Copy text')
-        copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.text))
-        button = QDialogButtonBox.Close
-        self.buttonBox = QDialogButtonBox(button)
-        self.buttonBox.accepted.connect(self.accept)
-        self.buttonBox.rejected.connect(self.reject)
         layout = QVBoxLayout()
-        message = QPlainTextEdit(self)
+        message = QPlainTextEdit()
         message.setPlainText(text)
         message.setReadOnly(True)
         layout.addWidget(message)
+        copy_button = QPushButton(text='Copy text')
+        copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(text))
         layout.addWidget(copy_button)
-        layout.addWidget(self.buttonBox)
+        close_button = QDialogButtonBox(QDialogButtonBox.Close)
+        close_button.accepted.connect(self.accept)
+        close_button.rejected.connect(self.reject)
+        layout.addWidget(close_button)
         self.setLayout(layout)
+        self.setModal(True)
 
 def show_error_message(text):
     ExtendedInfoMessage(title='Error', text=text).exec()
@@ -365,7 +364,7 @@ class MainWindow(QMainWindow):
             canvas = await util.peval(lambda: open_file(file_path))
         except Exception as ex:
             logging.exception(ex)
-            show_error_message(ex)
+            show_error_message(traceback.format_exc())
             return
 
         canvas_state = CanvasState(
