@@ -13,7 +13,7 @@ DVec4 = tuple[float, float, float, float]
 class SelectableObject(PClass):
     id:int = field()
 
-class BaseTile(PClass):
+class BaseArrayTile(PClass):
     data:np.ndarray = field(mandatory=True)
 
     @classmethod
@@ -26,13 +26,17 @@ class BaseTile(PClass):
     def lock(self):
         self.data.flags.writeable=False
 
-class ColorTile(BaseTile):
+class ColorTile(BaseArrayTile):
     def make(size:IVec2, lock=True):
         return Self.from_data(np.zeros(size + (3,), dtype=STORAGE_DTYPE), lock)
 
-class AlphaTile(BaseTile):
+class AlphaTile(BaseArrayTile):
     def make(size:IVec2, lock=True):
         return Self.from_data(np.zeros(size + (1,), dtype=STORAGE_DTYPE), lock)
+
+class FillTile(PClass):
+    size:IVec2 = field()
+    value:tuple | STORAGE_DTYPE = field()
 
 class Mask(SelectableObject):
     position:IVec2 = field(initial=(0, 0))
@@ -70,7 +74,7 @@ class BaseLayer(SelectableObject):
 class PixelLayer(BaseLayer):
     position:IVec2 = field(initial=(0, 0))
     color:PMap[IVec2, ColorTile] = field(initial=pmap())
-    alpha:PMap[IVec2, AlphaTile] = field(initial=pmap())
+    alpha:PMap[IVec2, AlphaTile | FillTile] = field(initial=pmap())
 
     def get_pixel_data(self, target_color_buffer:np.ndarray, target_alpha_buffer:np.ndarray, target_offset:IVec2):
         color = get_overlap_regions(self.color, self.position, target_color_buffer, target_offset)
@@ -109,7 +113,7 @@ class Canvas(PClass):
             selection=self.selection.thaw() if self.selection is not None else None
         )
 
-def get_overlap_regions(tiles:PMap[IVec2, BaseTile], tiles_offset:IVec2, target_buffer:np.ndarray, target_offset:IVec2) -> dict[IVec2, tuple[np.ndarray, np.ndarray]]:
+def get_overlap_regions(tiles:PMap[IVec2, BaseArrayTile], tiles_offset:IVec2, target_buffer:np.ndarray, target_offset:IVec2) -> dict[IVec2, tuple[np.ndarray, np.ndarray]]:
     regions = dict()
     relative_offset = np.array(tiles_offset) - np.array(target_offset)
     for point in util.generate_points(target_buffer.shape[:2], TILE_SIZE):
@@ -118,7 +122,10 @@ def get_overlap_regions(tiles:PMap[IVec2, BaseTile], tiles_offset:IVec2, target_
         region_offset = (tile_index * TILE_SIZE) + relative_offset
         region = tiles.get(tuple(tile_index))
         if region is not None:
-            overlap_tiles = util.get_overlap_tiles(target_buffer, region.data, tuple(region_offset))
+            if isinstance(region, FillTile):
+                overlap_tiles = (util.get_overlap_view(target_buffer, region.size, tuple(region_offset)), region.value)
+            else:
+                overlap_tiles = util.get_overlap_tiles(target_buffer, region.data, tuple(region_offset))
             overlap_shape = overlap_tiles[0].shape[:2]
             if overlap_shape[0] != 0 and overlap_shape[1] != 0:
                 regions[tuple(tile_index)] = overlap_tiles
@@ -151,7 +158,9 @@ def prune_tiles(color_tiles:PMap[IVec2, ColorTile], alpha_tiles:PMap[IVec2, Alph
         alpha_tile = alpha_tiles.get(index)
         if alpha_tile is None or alpha_tile.data.any():
             new_color_tiles[index] = color_tile
-            if alpha_tile is not None:
+            if alpha_tile is None:
+                new_alpha_tiles[index] = FillTile(size=color_tile.data.shape[:2], value=255)
+            else:
                 new_alpha_tiles[index] = alpha_tile
     return pmap(new_color_tiles), pmap(new_alpha_tiles)
 

@@ -18,13 +18,13 @@ from .util import peval
 from .constants import *
 from .layer_data import *
 
-def check_lock(arr:np.ndarray):
-    return arr if arr.flags.writeable else None
+def check_lock(arr):
+    return arr if isinstance(arr, np.ndarray) and arr.flags.writeable else None
 
 def to_blending_type(arr:np.ndarray | np.number | None):
     if arr is None:
         return None
-    if np.issubdtype(np.array(arr).dtype.type, np.integer):
+    if np.issubdtype(np.array(arr).dtype.type, np.integer) or issubclass(type(arr), int):
         return BLENDING_DTYPE(arr) / 255.0
     else:
         return arr
