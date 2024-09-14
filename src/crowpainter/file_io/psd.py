@@ -56,8 +56,8 @@ def _get_sai_special_mode_opacity(layer:psdl.Layer):
     tsly = blocks.get(psdc.Tag.TRANSPARENCY_SHAPES_LAYER, None)
     iOpa = blocks.get(psdc.Tag.BLEND_FILL_OPACITY, None)
     if tsly and iOpa and tsly.data == 0:
-        return iOpa.data, _from_psd_special.get(layer.blend_mode, BlendMode.NORMAL)
-    return layer.opacity, _from_psd_blendmode.get(layer.blend_mode, BlendMode.NORMAL)
+        return STORAGE_DTYPE(iOpa.data), _from_psd_special.get(layer.blend_mode, BlendMode.NORMAL)
+    return STORAGE_DTYPE(layer.opacity), _from_psd_blendmode.get(layer.blend_mode, BlendMode.NORMAL)
 
 def _get_protection_settings(layer:psdl.Layer):
     blocks = layer._record.tagged_blocks

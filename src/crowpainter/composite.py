@@ -52,7 +52,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
         elif isinstance(sublayer, PixelLayer):
             pixel_srcs = sublayer.get_pixel_data(color_dst, alpha_dst, offset)
 
-        opacity = BLENDING_DTYPE(sublayer.opacity) / 255.0
+        opacity = to_blending_type(sublayer.opacity)
 
         for (sub_offset, ((sub_color_dst, sub_color_src), (sub_alpha_dst, sub_alpha_src))) in pixel_srcs.items():
             sub_color_src = to_blending_type(sub_color_src)
