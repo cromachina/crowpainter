@@ -145,6 +145,7 @@ class Viewport(QGraphicsView):
         self.verticalScrollBar().disconnect(self)
         self.setMouseTracking(True)
         self.setTabletTracking(True)
+        self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -153,18 +154,21 @@ class Viewport(QGraphicsView):
     # TODO: Experiment with tiled pixmaps to help Qt optimize rendering.
     def apply_transform(self):
         size = self.size()
-        view_h = size.height()
         view_w = size.width()
+        view_h = size.height()
         view_x = self.position.x()
         view_y = self.position.y()
         image_x = self.composite_image.shape[1]
         image_y = self.composite_image.shape[0]
-        target_buffer = np.empty((view_h, view_w, 3), dtype=np.ubyte)
         zoom = scroll_zoom_levels[self.zoom]
         # TODO panning is correct, but zoom and rotation happens about the center of the pic
         # instead of the center of the screen.
 
-        # For small scale we use resize and Qt transforms to move the view around.
+        # TODO The reason I have to do this weird zoom hack is because Qt cannot display huge pixmaps
+        # efficiently, however, opencv's warpAffine does not actually implement INTER_AREA, so downscaling
+        # and transforming an image will look like crap, in which case it's better to use resize and then
+        # let Qt take care of the transform again. It does not seem like this will be solved any time soon,
+        # or perhaps ever. https://github.com/opencv/opencv/issues/21060
         if zoom < 1:
             img = cv2.resize(self.composite_image, dsize=None, fx=zoom, fy=zoom, interpolation=cv2.INTER_AREA)
             self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(img)))
@@ -172,13 +176,14 @@ class Viewport(QGraphicsView):
             self.scene().clear()
             self.scene().addItem(self.pixmap)
             t = (QTransform()
+                .translate(view_w / 2, view_h / 2)
                 .translate(view_x, view_y)
                 .rotate(self.rotation)
                 .translate(-img.shape[1] / 2, -img.shape[0] / 2)
             )
             self.pixmap.setTransform(t)
-        # For large scale, we transform into a fixed pixmap
         else:
+            target_buffer = np.empty((view_h, view_w, 3), dtype=np.ubyte)
             matrix = multiply(
                 translate(-image_x / 2, -image_y / 2),
                 rotate(self.rotation),
@@ -186,11 +191,11 @@ class Viewport(QGraphicsView):
                 translate(view_x, view_y),
                 translate(view_w / 2, view_h / 2),
             )[:2]
-            cv2.warpAffine(self.composite_image, matrix, dsize=(view_w, view_h), dst=target_buffer, flags=cv2.INTER_AREA)
+            inter = cv2.INTER_NEAREST if zoom >= 2 else cv2.INTER_CUBIC
+            cv2.warpAffine(self.composite_image, matrix, dsize=(view_w, view_h), dst=target_buffer, flags=inter)
             self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(target_buffer)))
             self.scene().clear()
             self.scene().addItem(self.pixmap)
-            self.pixmap.setTransform(QTransform().translate(-view_w / 2, -view_h / 2))
 
     async def reset_viewport(self):
         self.scene().clear()
