@@ -28,17 +28,17 @@ class BaseTile(PClass):
 
 class ColorTile(BaseTile):
     def make(size:IVec2, lock=True):
-        return Self.from_data(np.zeros(size + (3,), dtype=DTYPE), lock)
+        return Self.from_data(np.zeros(size + (3,), dtype=STORAGE_DTYPE), lock)
 
 class AlphaTile(BaseTile):
     def make(size:IVec2, lock=True):
-        return Self.from_data(np.zeros(size + (1,), dtype=DTYPE), lock)
+        return Self.from_data(np.zeros(size + (1,), dtype=STORAGE_DTYPE), lock)
 
 class Mask(SelectableObject):
     position:IVec2 = field(initial=(0, 0))
     alpha:PMap[IVec2, AlphaTile] = field(initial=pmap())
     visible:bool = field(initial=True)
-    background_color:DTYPE = field(initial=0.0)
+    background_color:STORAGE_DTYPE = field(initial=0)
 
     # TODO if mask data partially covers target buffer, then it needs to be blitted onto the background color
     # to completely fill the area of the target buffer.
@@ -52,7 +52,7 @@ class BaseLayer(SelectableObject):
     name:str = field(initial="")
     blend_mode:BlendMode = field(initial=BlendMode.NORMAL)
     visible:bool = field(initial=True)
-    opacity:float = field(initial=1.0)
+    opacity:float = field(initial=255)
     lock_alpha:bool = field(initial=False)
     lock_draw:bool = field(initial=False)
     lock_move:bool = field(initial=False)
@@ -130,7 +130,7 @@ def pixel_data_to_tiles(data:np.ndarray, tile_constructor):
     tiles = {}
     for (size, offset) in util.generate_tiles(data.shape[:2], TILE_SIZE):
         offset = np.array(offset)
-        tile = np.zeros(shape=size + data.shape[2:], dtype=DTYPE)
+        tile = np.zeros(shape=size + data.shape[2:], dtype=STORAGE_DTYPE)
         util.blit(tile, data, -offset)
         index = tuple(offset // TILE_SIZE)
         tiles[index] = tile_constructor(data=tile)
@@ -139,7 +139,7 @@ def pixel_data_to_tiles(data:np.ndarray, tile_constructor):
 def scalar_to_tiles(value, shape, tile_constructor):
     tiles = {}
     for (size, offset) in util.generate_tiles(shape[:2], TILE_SIZE):
-        tile = np.full(shape=size + shape[2:], dtype=DTYPE, fill_value=value)
+        tile = np.full(shape=size + shape[2:], dtype=STORAGE_DTYPE, fill_value=value)
         index = tuple(np.array(offset) // TILE_SIZE)
         tiles[index] = tile_constructor(data=tile)
     return pmap(tiles)

@@ -4,6 +4,10 @@ from concurrent.futures import ThreadPoolExecutor
 import psutil
 import numpy as np
 from pyrsistent import *
+import psd_tools.constants as ptc
+from psd_tools.api.layers import Layer
+
+from .file_io import rle
 
 worker_count = psutil.cpu_count(False)
 pool = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix='WorkerThread')
@@ -88,3 +92,64 @@ def get_system_stats():
         system_memory_usage = int(mem_stats.percent),
         disk_usage = int(disk_used / disk_total * 100),
     )
+
+def _parse_array(data, depth, lut=None):
+    if depth == 8:
+        parsed = np.frombuffer(data, ">u1")
+        if lut is not None:
+            parsed = lut[parsed]
+        return parsed
+    elif depth == 16:
+        return (np.frombuffer(data, ">u2") / 256).astype(np.uint8)
+    elif depth == 32:
+        return (np.frombuffer(data, ">f4") * 256).astype(np.uint8)
+    elif depth == 1:
+        return np.unpackbits(np.frombuffer(data, np.uint8))
+    else:
+        raise ValueError("Unsupported depth: %g" % depth)
+
+def layer_numpy(layer:Layer, channel=None):
+    if channel == 'mask' and not layer.mask:
+        return None
+
+    depth = layer._psd.depth
+    version = layer._psd.version
+
+    def channel_matches(info):
+        if channel == 'color':
+            return info.id >= 0
+        if channel == 'shape':
+            return info.id == ptc.ChannelID.TRANSPARENCY_MASK
+        if channel == 'mask':
+            if not layer.mask:
+                return False
+            if layer.mask._has_real():
+                return info.id == ptc.ChannelID.REAL_USER_LAYER_MASK
+            else:
+                return info.id == ptc.ChannelID.USER_LAYER_MASK
+        else:
+            raise ValueError(f'Unknown channel type: {channel}')
+
+    channels = zip(layer._channels, layer._record.channel_info)
+    channels = [channel for channel, info in channels if channel_matches(info)]
+
+    if len(channels) == 0:
+        return None
+
+    # Use the psd-tools path if we are not decoding RLE
+    if not all([channel.compression == ptc.Compression.RLE for channel in channels]):
+        data = layer.numpy(channel)
+        if data is not None:
+            data = (data * 255.0).astype(np.uint8)
+        return data
+
+    if channel == 'mask':
+        width, height = layer.mask.width, layer.mask.height
+    else:
+        width, height = layer.width, layer.height
+
+    decoded = []
+    for channel in channels:
+        decoded.append(_parse_array(rle.decode_rle(channel.data, width, height, depth, version), depth))
+
+    return np.stack(decoded, axis=1).reshape((height, width, -1))

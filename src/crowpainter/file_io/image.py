@@ -10,10 +10,10 @@ def read(file_path:Path) -> Canvas:
         raise Exception('Error opening file', file_path)
 
     if data.shape[2] == 3:
-        color = cv2.cvtColor(data, cv2.COLOR_BGR2RGB).astype(DTYPE) / 255.0
-        alpha = 1.0
+        color = cv2.cvtColor(data, cv2.COLOR_BGR2RGB)
+        alpha = 255
     else:
-        data = cv2.cvtColor(data, cv2.COLOR_BGRA2RGBA).astype(DTYPE) / 255.0
+        data = cv2.cvtColor(data, cv2.COLOR_BGRA2RGBA)
         color, alpha = np.split(data, [2], axis=2)
     data = None
 

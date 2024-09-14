@@ -204,11 +204,11 @@ class Viewport(QGraphicsView):
         def comp_runner():
             size = canvas.size
             offset = (0, 0)
-            color = np.zeros(size + (3,), dtype=DTYPE)
-            alpha = np.zeros(size + (1,), dtype=DTYPE)
+            color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
+            alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
             color, _ = composite.composite(canvas.top_level, offset, (color, alpha))
             color *= 255
-            color = color.astype(np.ubyte)
+            color = color.astype(STORAGE_DTYPE)
             return color
         self.composite_image = await util.peval(comp_runner)
         self.apply_transform()

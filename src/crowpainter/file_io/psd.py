@@ -56,8 +56,8 @@ def _get_sai_special_mode_opacity(layer:psdl.Layer):
     tsly = blocks.get(psdc.Tag.TRANSPARENCY_SHAPES_LAYER, None)
     iOpa = blocks.get(psdc.Tag.BLEND_FILL_OPACITY, None)
     if tsly and iOpa and tsly.data == 0:
-        return DTYPE(iOpa.data) / 255.0, _from_psd_special.get(layer.blend_mode, BlendMode.NORMAL)
-    return DTYPE(layer.opacity) / 255.0, _from_psd_blendmode.get(layer.blend_mode, BlendMode.NORMAL)
+        return iOpa.data, _from_psd_special.get(layer.blend_mode, BlendMode.NORMAL)
+    return layer.opacity, _from_psd_blendmode.get(layer.blend_mode, BlendMode.NORMAL)
 
 def _get_protection_settings(layer:psdl.Layer):
     blocks = layer._record.tagged_blocks
@@ -66,10 +66,8 @@ def _get_protection_settings(layer:psdl.Layer):
     return tuple((util.bit(data, bit) for bit in [0, 1, 2, 32]))
 
 def _get_layer_channel(layer:psdl.Layer, channel):
-    data = layer.numpy(channel)
+    data = util.layer_numpy(layer, channel)
     tile_type = ColorTile if channel == 'color' else AlphaTile
-    if data is not None:
-        data = data.astype(DTYPE)
     return pixel_data_to_tiles(data, tile_type)
 
 def _get_mask(layer:psdl.Layer):
@@ -78,7 +76,7 @@ def _get_mask(layer:psdl.Layer):
             position=(layer.mask.top, layer.mask.left),
             alpha=_get_layer_channel(layer, 'mask'),
             visible=not layer.mask.disabled,
-            background_color=DTYPE(layer.background_color / 255),
+            background_color=layer.background_color,
         )
     else:
         return None

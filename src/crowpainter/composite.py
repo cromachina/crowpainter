@@ -21,6 +21,14 @@ from .layer_data import *
 def check_lock(arr:np.ndarray):
     return arr if arr.flags.writeable else None
 
+def to_blending_type(arr:np.ndarray | np.number | None):
+    if arr is None:
+        return None
+    if np.issubdtype(np.array(arr).dtype.type, np.integer):
+        return BLENDING_DTYPE(arr) / 255.0
+    else:
+        return arr
+
 def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[np.ndarray, np.ndarray]):
     color_dst, alpha_dst = backdrop
 
@@ -41,14 +49,17 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
         elif isinstance(sublayer, PixelLayer):
             pixel_srcs = sublayer.get_pixel_data(color_dst, alpha_dst, offset)
 
-        opacity = sublayer.opacity
+        opacity = BLENDING_DTYPE(sublayer.opacity) / 255.0
 
         for (sub_offset, ((sub_color_dst, sub_color_src), (sub_alpha_dst, sub_alpha_src))) in pixel_srcs.items():
+            sub_color_src = to_blending_type(sub_color_src)
+            sub_alpha_src = to_blending_type(sub_alpha_src)
             sub_masks = sublayer.get_mask_data(sub_alpha_dst, sub_offset)
             if sub_masks is None:
                 mask_src = None
             else:
                 mask_src = sub_masks.get(sub_offset)
+            mask_src = to_blending_type(mask_src)
 
             # A pass-through layer has already been blended, so just lerp instead.
             # NOTE: Clipping layers do not apply to pass layers, as if clipping were simply disabled.
@@ -57,12 +68,8 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
                     mask_src = opacity
                 else:
                     mask_src = np.multiply(mask_src, opacity)
-                if np.isscalar(mask_src) and mask_src == 1.0:
-                    np.copyto(sub_color_dst, sub_color_src)
-                    np.copyto(sub_alpha_dst, sub_alpha_src)
-                else:
-                    blendfuncs.lerp(sub_color_dst, sub_color_src, mask_src, out=sub_color_dst)
-                    blendfuncs.lerp(sub_alpha_dst, sub_alpha_src, mask_src, out=sub_alpha_dst)
+                blendfuncs.lerp(sub_color_dst, sub_color_src, mask_src, out=sub_color_dst)
+                blendfuncs.lerp(sub_alpha_dst, sub_alpha_src, mask_src, out=sub_alpha_dst)
             else:
                 if isinstance(sublayer, GroupLayer):
                     # Un-multiply group composites so that we can multiply group opacity correctly
@@ -75,7 +82,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
                     # alpha blending it first. For whatever reason, applying a large root to the alpha source before passing
                     # it to clip compositing fixes brightening that can occur with certain blend modes (like multiply).
                     corrected_alpha = sub_alpha_src ** 0.0001
-                    clip_src, _ = composite(sublayer.clip_layers, offset, (sub_color_src, corrected_alpha))
+                    clip_src, _ = composite(sublayer.clip_layers, sub_offset, (sub_color_src, corrected_alpha))
                     if clip_src is not None:
                         sub_color_src = clip_src
 
