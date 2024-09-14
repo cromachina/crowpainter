@@ -94,7 +94,6 @@ def _get_base_layer_properties(layer:psdl.Layer):
         'lock_move': lock_move,
         'lock_all': lock_all,
         'clip': layer.clipping_layer,
-        'clip_layers': None,
         'mask': _get_mask(layer),
     }
 

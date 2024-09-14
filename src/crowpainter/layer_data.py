@@ -63,7 +63,6 @@ class BaseLayer(SelectableObject):
     lock_move:bool = field(initial=False)
     lock_all:bool = field(initial=False)
     clip:bool = field(initial=False)
-    clip_layers:PVector[Self] | None = field(initial=None)
     mask:Mask | None = field(initial=None)
 
     def get_mask_data(self, target_alpha_buffer:np.ndarray, target_offset:IVec2):

@@ -29,10 +29,30 @@ def to_blending_type(arr:np.ndarray | np.number | None):
     else:
         return arr
 
+def get_layer_and_clip_groupings(layers:GroupLayer | list [BaseLayer]):
+    grouped_layers = []
+    clip_stack = []
+    for layer in reversed(layers):
+        if layer.clip:
+            clip_stack.append(layer)
+        else:
+            clip_stack.reverse()
+            if layer.blend_mode == BlendMode.PASS:
+                for sublayer in clip_stack:
+                    grouped_layers.append((sublayer, []))
+                grouped_layers.append((layer, []))
+            else:
+                grouped_layers.append((layer, clip_stack))
+            clip_stack = []
+    for sublayer in clip_stack:
+        grouped_layers.append((sublayer, []))
+    grouped_layers.reverse()
+    return grouped_layers
+
 def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[np.ndarray, np.ndarray]):
     color_dst, alpha_dst = backdrop
 
-    for sublayer in layer:
+    for sublayer, clip_layers in get_layer_and_clip_groupings(layer):
         if not sublayer.visible:
             continue
         blend_mode = sublayer.blend_mode
@@ -71,16 +91,12 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
                     # Un-multiply group composites so that we can multiply group opacity correctly
                     sub_color_src = blendfuncs.clip_divide(sub_color_src, sub_alpha_src, out=check_lock(sub_color_src))
 
-                # TODO: Figure out how to do clip layers without reorganizing the layer substructure.
-                # Could keep the alpha source of the previous sublayer
-                if sublayer.clip_layers:
+                if len(clip_layers) != 0:
                     # Composite the clip layers now. This basically overwrites just the color by blending onto it without
                     # alpha blending it first. For whatever reason, applying a large root to the alpha source before passing
                     # it to clip compositing fixes brightening that can occur with certain blend modes (like multiply).
                     corrected_alpha = sub_alpha_src ** 0.0001
-                    clip_src, _ = composite(sublayer.clip_layers, sub_offset, (sub_color_src, corrected_alpha))
-                    if clip_src is not None:
-                        sub_color_src = clip_src
+                    sub_color_src, _ = composite(clip_layers, sub_offset, (sub_color_src.copy(), corrected_alpha))
 
                 # Apply opacity (fill) before blending otherwise premultiplied blending of special modes will not work correctly.
                 sub_alpha_src = np.multiply(sub_alpha_src, opacity, out=check_lock(sub_alpha_src))
