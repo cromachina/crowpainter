@@ -414,6 +414,9 @@ class MainWindow(QMainWindow):
         self.viewport_tab.removeTab(index)
 
     def on_tab_selected(self, index):
+        if index == -1:
+            self.layer_panel_dock.setWidget(None)
+            return
         viewport:Viewport = self.viewport_tab.widget(index)
         canvas_state = viewport.canvas_state.get_current()
         list = LayerList(is_group=False)

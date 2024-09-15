@@ -11,7 +11,7 @@ IVec2 = tuple[int, int]
 DVec4 = tuple[float, float, float, float]
 
 class SelectableObject(PClass):
-    id:int = field()
+    id:int = field(initial=0)
 
 class BaseArrayTile(PClass):
     data:np.ndarray = field(mandatory=True)
