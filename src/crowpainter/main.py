@@ -88,7 +88,7 @@ def make_pyramid(image):
     return pyramid
 
 # Only allow specific zoom levels, otherwise the view result might look like crap.
-scroll_zoom_levels = [2 ** (x / 4) for x in range(-28, 22)]
+scroll_zoom_levels = [2 ** (x / 4) for x in range(-28, 21)]
 default_zoom_level = 28
 
 def find_fitting_zoom_level(view, image):
@@ -154,7 +154,7 @@ class Viewport(QGraphicsView):
         super().__init__(parent)
         self.position = QPointF()
         self.zoom = default_zoom_level
-        self.last_zoom = self.zoom
+        self.last_zoom = None
         self.rotation = 0.0
         self.canvas_state = canvas_state
         self.composite_image:np.ndarray = initial_composite
@@ -170,7 +170,6 @@ class Viewport(QGraphicsView):
         self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.first_show = True
 
-    # TODO: Experiment with tiled pixmaps to help Qt optimize rendering.
     def apply_transform(self):
         size = self.size()
         view_w = size.width()
@@ -182,12 +181,6 @@ class Viewport(QGraphicsView):
         zoom = scroll_zoom_levels[self.zoom]
         # TODO panning is correct, but zoom and rotation happens about the center of the pic
         # instead of the center of the screen.
-
-        # TODO The reason I have to do this weird zoom hack is because Qt cannot display huge pixmaps
-        # efficiently, however, opencv's warpAffine does not actually implement INTER_AREA, so downscaling
-        # and transforming an image will look like crap, in which case it's better to use resize and then
-        # let Qt take care of the transform again. It does not seem like this will be solved any time soon,
-        # or perhaps ever. https://github.com/opencv/opencv/issues/21060
         if zoom < 1:
             if self.zoom != self.last_zoom:
                 img = cv2.resize(self.composite_image, dsize=None, fx=zoom, fy=zoom, interpolation=cv2.INTER_AREA)
@@ -195,28 +188,34 @@ class Viewport(QGraphicsView):
                 self.pixmap.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
                 self.scene().clear()
                 self.scene().addItem(self.pixmap)
+            img_size = self.pixmap.pixmap().size()
             t = (QTransform()
                 .translate(view_w / 2, view_h / 2)
                 .translate(view_x, view_y)
                 .rotate(self.rotation)
-                .translate(-img.shape[1] / 2, -img.shape[0] / 2)
+                .translate(-img_size.width() / 2, -img_size.height() / 2)
             )
             self.pixmap.setTransform(t)
         else:
-            target_buffer = np.empty((view_h, view_w, 3), dtype=np.ubyte)
+            do_ssaa = zoom >= 2 and (self.rotation not in [0, 90, 180, 270] or zoom not in [2, 4, 8, 16, 32])
+            scale_factor = 2 if do_ssaa else 1
+            target_buffer = np.empty((view_h * scale_factor, view_w * scale_factor, 3), dtype=np.ubyte)
             matrix = multiply(
                 translate(-image_x / 2, -image_y / 2),
                 rotate(self.rotation),
-                scale(zoom),
-                translate(view_x, view_y),
-                translate(view_w / 2, view_h / 2),
+                scale(zoom * scale_factor),
+                translate(view_x * scale_factor, view_y * scale_factor),
+                translate(view_w * scale_factor * 0.5, view_h * scale_factor * 0.5),
             )[:2]
             inter = cv2.INTER_NEAREST if zoom >= 2 else cv2.INTER_CUBIC
-            cv2.warpAffine(self.composite_image, matrix, dsize=(view_w, view_h), dst=target_buffer, flags=inter)
+            t_h, t_w = target_buffer.shape[:2]
+            cv2.warpAffine(self.composite_image, matrix, dsize=(t_w, t_h), dst=target_buffer, flags=inter)
+            if do_ssaa:
+                target_buffer = cv2.resize(target_buffer, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
             self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(target_buffer)))
             self.scene().clear()
             self.scene().addItem(self.pixmap)
-        self.last_zoom = zoom
+        self.last_zoom = self.zoom
 
     def fit_canvas_in_view(self):
         self.position = QPointF()
