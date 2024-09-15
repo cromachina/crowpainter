@@ -154,6 +154,7 @@ class Viewport(QGraphicsView):
         super().__init__(parent)
         self.position = QPointF()
         self.zoom = default_zoom_level
+        self.last_zoom = self.zoom
         self.rotation = 0.0
         self.canvas_state = canvas_state
         self.composite_image:np.ndarray = initial_composite
@@ -188,11 +189,12 @@ class Viewport(QGraphicsView):
         # let Qt take care of the transform again. It does not seem like this will be solved any time soon,
         # or perhaps ever. https://github.com/opencv/opencv/issues/21060
         if zoom < 1:
-            img = cv2.resize(self.composite_image, dsize=None, fx=zoom, fy=zoom, interpolation=cv2.INTER_AREA)
-            self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(img)))
-            self.pixmap.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
-            self.scene().clear()
-            self.scene().addItem(self.pixmap)
+            if self.zoom != self.last_zoom:
+                img = cv2.resize(self.composite_image, dsize=None, fx=zoom, fy=zoom, interpolation=cv2.INTER_AREA)
+                self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(img)))
+                self.pixmap.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+                self.scene().clear()
+                self.scene().addItem(self.pixmap)
             t = (QTransform()
                 .translate(view_w / 2, view_h / 2)
                 .translate(view_x, view_y)
@@ -214,6 +216,7 @@ class Viewport(QGraphicsView):
             self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(target_buffer)))
             self.scene().clear()
             self.scene().addItem(self.pixmap)
+        self.last_zoom = zoom
 
     def fit_canvas_in_view(self):
         self.position = QPointF()
