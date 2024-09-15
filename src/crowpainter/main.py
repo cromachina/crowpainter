@@ -21,17 +21,17 @@ class ExtendedInfoMessage(QDialog):
     def __init__(self, parent=None, title='', text=''):
         super().__init__(parent)
         self.setWindowTitle(title)
-        layout = QVBoxLayout()
         message = QPlainTextEdit()
         message.setPlainText(text)
         message.setReadOnly(True)
-        layout.addWidget(message)
         copy_button = QPushButton(text='Copy text')
         copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(text))
-        layout.addWidget(copy_button)
         close_button = QDialogButtonBox(QDialogButtonBox.Close)
         close_button.accepted.connect(self.accept)
         close_button.rejected.connect(self.reject)
+        layout = QVBoxLayout()
+        layout.addWidget(message)
+        layout.addWidget(copy_button)
         layout.addWidget(close_button)
         self.setLayout(layout)
         self.setModal(True)
@@ -276,21 +276,92 @@ class Viewport(QGraphicsView):
             self.apply_transform()
         self.last_mouse_pos = event.position()
 
+class LayerTextItem(QWidget):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        small_font = 'font: 7pt;'
+        self.layer_name = QLabel()
+        self.blend_mode = QLabel()
+        self.blend_mode.setStyleSheet(small_font)
+        self.opacity = QLabel()
+        self.opacity.setStyleSheet(small_font)
+        layout = QVBoxLayout()
+        layout.addWidget(self.layer_name)
+        layout.addWidget(self.blend_mode)
+        layout.addWidget(self.opacity)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0,0,0,0)
+        self.setLayout(layout)
+
+class LayerItem(QWidget):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+
+        frame = QFrame()
+        frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.visible_checkbox = QCheckBox()
+        self.icon = QLabel()
+        self.text = LayerTextItem()
+        layout = QHBoxLayout()
+        layout.addWidget(self.visible_checkbox)
+        layout.addWidget(self.icon)
+        layout.addWidget(self.text)
+        layout.setSpacing(3)
+        layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        layout.setContentsMargins(3,0,3,0)
+        frame.setLayout(layout)
+
+        self.child_list = LayerList()
+        vbox = QVBoxLayout()
+        vbox.addWidget(frame)
+        vbox.addWidget(self.child_list)
+        vbox.setSpacing(3)
+        vbox.setContentsMargins(0,0,0,0)
+        self.setLayout(vbox)
+
 class LayerList(QWidget):
-    def __init__(self, parent) -> None:
+    def __init__(self, is_group=True, parent=None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout()
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.setSpacing(0)
+        layout.setContentsMargins(20 if is_group else 0,0,0,0)
+        self.setLayout(layout)
+
+    def add_item(self, widget):
+        self.layout().insertWidget(0, widget)
+
+def blend_mode_to_str(blend_mode:layer_data.BlendMode):
+    return blend_mode.name.replace('_', ' ').title()
+
+def build_layer_list(layer_list:LayerList, layers:layer_data.GroupLayer):
+    for layer in layers:
+        layer:layer_data.BaseLayer
+        item = LayerItem()
+        item.layer_id = layer.id
+        item.visible_checkbox.setChecked(layer.visible)
+        item.text.layer_name.setText(layer.name)
+        item.text.blend_mode.setText(blend_mode_to_str(layer.blend_mode))
+        item.text.opacity.setText(f'{int(layer.opacity / 255 * 100)}%')
+        layer_list.add_item(item)
+        if isinstance(layer, layer_data.GroupLayer):
+            build_layer_list(item.child_list, layer)
+
+class LayerControlPanel(QDockWidget):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
 
 class StatusBar(QStatusBar):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.system_memory_bar = QProgressBar()
-        self.own_memory_bar = QProgressBar()
-        self.disk_bar = QProgressBar()
         self.system_memory_bar.setMaximumWidth(100)
-        self.own_memory_bar.setMaximumWidth(100)
-        self.disk_bar.setMaximumWidth(100)
         self.system_memory_bar.setTextVisible(False)
+        self.own_memory_bar = QProgressBar()
+        self.own_memory_bar.setMaximumWidth(100)
         self.own_memory_bar.setStyleSheet('background-color: rgba(0,0,0,0);')
+        self.disk_bar = QProgressBar()
+        self.disk_bar.setMaximumWidth(100)
         layout = QStackedLayout()
         layout.addWidget(self.system_memory_bar)
         layout.addWidget(self.own_memory_bar)
@@ -327,16 +398,28 @@ class MainWindow(QMainWindow):
         self.viewport_tab = QTabWidget(self)
         self.viewport_tab.setTabsClosable(True)
         self.viewport_tab.tabCloseRequested.connect(self.on_tab_close_requested)
+        self.viewport_tab.currentChanged.connect(self.on_tab_selected)
         self.setCentralWidget(self.viewport_tab)
-        self.dock = QDockWidget()
-        self.dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         statusbar = StatusBar()
         self.setStatusBar(statusbar)
+
+        self.layer_panel_dock = QDockWidget()
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.layer_panel_dock)
 
     def on_tab_close_requested(self, index):
         widget = self.viewport_tab.widget(index)
         widget.close()
         self.viewport_tab.removeTab(index)
+
+    def on_tab_selected(self, index):
+        viewport:Viewport = self.viewport_tab.widget(index)
+        canvas_state = viewport.canvas_state.get_current()
+        list = LayerList(is_group=False)
+        build_layer_list(list, canvas_state.top_level)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(list)
+        self.layer_panel_dock.setWidget(scroll_area)
 
     def on_new(self):
         pass
