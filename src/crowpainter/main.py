@@ -78,8 +78,15 @@ class CanvasState():
         self.saved_state = self.get_current()
 
 def np_to_qimage(img):
-    h, w, _ = img.shape
-    return QImage(img, w, h, 3 * w, QImage.Format.Format_RGB888)
+    h, w, d = img.shape
+    match d:
+        case 1:
+            format = QImage.Format.Format_Grayscale8
+        case 3:
+            format = QImage.Format.Format_RGB888
+        case 4:
+            format = QImage.Format.Format_RGBA8888
+    return QImage(img, w, h, format)
 
 def make_pyramid(image):
     pyramid = [image]
@@ -142,11 +149,24 @@ async def full_composite(canvas:layer_data.Canvas):
         offset = (0, 0)
         color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
         alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
-        color, _ = composite.composite(canvas.top_level, offset, (color, alpha))
+        color, alpha = composite.composite(canvas.top_level, offset, (color, alpha))
         color *= 255
         color = color.astype(STORAGE_DTYPE)
-        return color
+        alpha *= 255
+        alpha = alpha.astype(STORAGE_DTYPE)
+        return np.dstack((color, alpha))
     return await util.peval(comp_runner)
+
+def make_checkerboard_texture(check_a, check_b, size):
+    check_a = util.clamp(0, 255, check_a)
+    check_b = util.clamp(0, 255, check_b)
+    arr = np.array([check_a, check_b, check_b, check_a], dtype=STORAGE_DTYPE).reshape((2,2,1))
+    return cv2.resize(arr, (size, size), interpolation=cv2.INTER_NEAREST).reshape((size, size, 1))
+
+def make_ideal_checkerboard(value, size):
+    a = value * 0.9
+    b = value + 0.1
+    return make_checkerboard_texture(a * 255, b * 255, size)
 
 class Viewport(QGraphicsView):
     '''Display a canvas and handle input events for it.'''
@@ -160,6 +180,10 @@ class Viewport(QGraphicsView):
         self.composite_image:np.ndarray = initial_composite
         self.last_mouse_pos = QPointF(0, 0)
         self.moving_view = False
+        tex = QBrush(np_to_qimage(make_ideal_checkerboard(0.5, 32)))
+        self.canvas_bg_area = QGraphicsPolygonItem()
+        self.canvas_bg_area.setBrush(tex)
+        self.canvas_pixmap = QGraphicsPixmapItem()
         self.setScene(QGraphicsScene())
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -167,54 +191,54 @@ class Viewport(QGraphicsView):
         self.verticalScrollBar().disconnect(self)
         self.setMouseTracking(True)
         self.setTabletTracking(True)
+        self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.scene().addItem(self.canvas_bg_area)
+        self.scene().addItem(self.canvas_pixmap)
         self.first_show = True
 
     def apply_transform(self):
         size = self.size()
+        self.setSceneRect(self.rect())
         view_w = size.width()
         view_h = size.height()
         view_x = self.position.x()
         view_y = self.position.y()
-        image_x = self.composite_image.shape[1]
-        image_y = self.composite_image.shape[0]
+        image_w = self.composite_image.shape[1]
+        image_h = self.composite_image.shape[0]
         zoom = scroll_zoom_levels[self.zoom]
         # TODO panning is correct, but zoom and rotation happens about the center of the pic
         # instead of the center of the screen.
+        t = (QTransform()
+            .translate(view_w / 2, view_h / 2)
+            .translate(view_x, view_y)
+            .rotate(self.rotation)
+            .translate(-image_w * zoom / 2, -image_h * zoom / 2)
+        )
+        self.canvas_bg_area.setPolygon(t.mapToPolygon(QRect(0, 0, image_w * zoom, image_h * zoom)))
         if zoom < 1:
             if self.zoom != self.last_zoom:
                 img = cv2.resize(self.composite_image, dsize=None, fx=zoom, fy=zoom, interpolation=cv2.INTER_AREA)
-                self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(img)))
-                self.pixmap.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
-                self.scene().clear()
-                self.scene().addItem(self.pixmap)
-            img_size = self.pixmap.pixmap().size()
-            t = (QTransform()
-                .translate(view_w / 2, view_h / 2)
-                .translate(view_x, view_y)
-                .rotate(self.rotation)
-                .translate(-img_size.width() / 2, -img_size.height() / 2)
-            )
-            self.pixmap.setTransform(t)
+                self.canvas_pixmap.setPixmap(QPixmap(np_to_qimage(img)))
+                self.canvas_pixmap.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+            self.canvas_pixmap.setTransform(t)
         else:
             do_ssaa = zoom >= 2 and (self.rotation not in [0, 90, 180, 270] or zoom not in [2, 4, 8, 16, 32])
             scale_factor = 2 if do_ssaa else 1
-            target_buffer = np.empty((view_h * scale_factor, view_w * scale_factor, 3), dtype=np.ubyte)
             matrix = multiply(
-                translate(-image_x / 2, -image_y / 2),
+                translate(-image_w / 2, -image_h / 2),
                 rotate(self.rotation),
                 scale(zoom * scale_factor),
                 translate(view_x * scale_factor, view_y * scale_factor),
                 translate(view_w * scale_factor * 0.5, view_h * scale_factor * 0.5),
             )[:2]
             inter = cv2.INTER_NEAREST if zoom >= 2 else cv2.INTER_CUBIC
-            t_h, t_w = target_buffer.shape[:2]
-            cv2.warpAffine(self.composite_image, matrix, dsize=(t_w, t_h), dst=target_buffer, flags=inter)
+            target_buffer = cv2.warpAffine(self.composite_image, matrix, dsize=(view_w * scale_factor, view_h * scale_factor), flags=inter)
             if do_ssaa:
                 target_buffer = cv2.resize(target_buffer, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
-            self.pixmap = QGraphicsPixmapItem(QPixmap(np_to_qimage(target_buffer)))
-            self.scene().clear()
-            self.scene().addItem(self.pixmap)
+            self.canvas_pixmap.setPixmap(QPixmap(np_to_qimage(target_buffer)))
+            self.canvas_pixmap.setTransformationMode(Qt.TransformationMode.FastTransformation)
+            self.canvas_pixmap.resetTransform()
         self.last_zoom = self.zoom
 
     def fit_canvas_in_view(self):
