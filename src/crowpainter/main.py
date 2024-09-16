@@ -133,7 +133,7 @@ def translate(dx, dy):
 
 def multiply(*matrices):
     result = np.identity(3, np.float64)
-    for m in reversed(matrices):
+    for m in matrices:
         np.matmul(result, m, result)
     return result
 
@@ -192,7 +192,6 @@ class Viewport(QGraphicsView):
         self.setMouseTracking(True)
         self.setTabletTracking(True)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.scene().addItem(self.canvas_bg_area)
         self.scene().addItem(self.canvas_pixmap)
         self.first_show = True
@@ -211,8 +210,8 @@ class Viewport(QGraphicsView):
         # instead of the center of the screen.
         t = (QTransform()
             .translate(view_w / 2, view_h / 2)
-            .translate(view_x, view_y)
             .rotate(self.rotation)
+            .translate(view_x, view_y)
             .translate(-image_w * zoom / 2, -image_h * zoom / 2)
         )
         self.canvas_bg_area.setPolygon(t.mapToPolygon(QRect(0, 0, image_w * zoom, image_h * zoom)))
@@ -226,11 +225,11 @@ class Viewport(QGraphicsView):
             do_ssaa = zoom >= 2 and (self.rotation not in [0, 90, 180, 270] or zoom not in [2, 4, 8, 16, 32])
             scale_factor = 2 if do_ssaa else 1
             matrix = multiply(
-                translate(-image_w / 2, -image_h / 2),
-                rotate(self.rotation),
-                scale(zoom * scale_factor),
-                translate(view_x * scale_factor, view_y * scale_factor),
                 translate(view_w * scale_factor * 0.5, view_h * scale_factor * 0.5),
+                rotate(self.rotation),
+                translate(view_x * scale_factor, view_y * scale_factor),
+                scale(zoom * scale_factor),
+                translate(-image_w / 2, -image_h / 2),
             )[:2]
             inter = cv2.INTER_NEAREST if zoom >= 2 else cv2.INTER_CUBIC
             target_buffer = cv2.warpAffine(self.composite_image, matrix, dsize=(view_w * scale_factor, view_h * scale_factor), flags=inter)
@@ -298,6 +297,7 @@ class Viewport(QGraphicsView):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self.moving_view:
             delta = event.position() - self.last_mouse_pos
+            delta = QTransform().rotate(-self.rotation).map(delta)
             self.position += delta
             self.apply_transform()
         self.last_mouse_pos = event.position()
