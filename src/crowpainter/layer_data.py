@@ -92,6 +92,7 @@ class PixelLayer(BaseLayer):
 
 class GroupLayer(BaseLayer):
     layers:PVector[BaseLayer] = field(initial=pvector())
+    folder_open:bool = field(initial=True)
 
     def __iter__(self):
         return iter(self.layers)

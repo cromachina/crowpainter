@@ -281,8 +281,10 @@ class Viewport(QGraphicsView):
 class LayerTextItem(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        name_font = 'font: 8pt;'
         small_font = 'font: 7pt;'
         self.layer_name = QLabel()
+        self.layer_name.setStyleSheet(name_font)
         self.blend_mode = QLabel()
         self.blend_mode.setStyleSheet(small_font)
         self.opacity = QLabel()
@@ -296,13 +298,19 @@ class LayerTextItem(QWidget):
         self.setLayout(layout)
 
 class LayerItem(QWidget):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, is_group, parent=None) -> None:
         super().__init__(parent)
 
         frame = QFrame()
         frame.setFrameShape(QFrame.Shape.StyledPanel)
         self.visible_checkbox = QCheckBox()
-        self.icon = QLabel()
+        self.visible_checkbox.setStatusTip('Change layer visibility')
+        if is_group:
+            self.icon = QPushButton()
+            self.icon.setCheckable(True)
+            self.icon.clicked.connect(self.on_group_icon_clicked)
+        else:
+            self.icon = QLabel()
         self.text = LayerTextItem()
         layout = QHBoxLayout()
         layout.addWidget(self.visible_checkbox)
@@ -317,9 +325,18 @@ class LayerItem(QWidget):
         vbox = QVBoxLayout()
         vbox.addWidget(frame)
         vbox.addWidget(self.child_list)
-        vbox.setSpacing(3)
+        vbox.setSpacing(0)
         vbox.setContentsMargins(0,0,0,0)
         self.setLayout(vbox)
+
+    def on_group_icon_clicked(self, checked):
+        self.icon.setChecked(checked)
+        if checked:
+            self.icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown))
+            self.child_list.show()
+        else:
+            self.icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight))
+            self.child_list.hide()
 
 class LayerList(QWidget):
     def __init__(self, is_group=True, parent=None) -> None:
@@ -339,15 +356,17 @@ def blend_mode_to_str(blend_mode:layer_data.BlendMode):
 def build_layer_list(layer_list:LayerList, layers:layer_data.GroupLayer):
     for layer in layers:
         layer:layer_data.BaseLayer
-        item = LayerItem()
+        is_group = isinstance(layer, layer_data.GroupLayer)
+        item = LayerItem(is_group)
         item.layer_id = layer.id
         item.visible_checkbox.setChecked(layer.visible)
         item.text.layer_name.setText(layer.name)
         item.text.blend_mode.setText(blend_mode_to_str(layer.blend_mode))
         item.text.opacity.setText(f'{int(layer.opacity / 255 * 100)}%')
         layer_list.add_item(item)
-        if isinstance(layer, layer_data.GroupLayer):
+        if is_group:
             build_layer_list(item.child_list, layer)
+            item.on_group_icon_clicked(layer.folder_open)
 
 class LayerControlPanel(QDockWidget):
     def __init__(self, parent=None) -> None:
@@ -505,6 +524,7 @@ def init_logging():
 
 def main():
     init_logging()
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling)
     app = QApplication(sys.argv)
     main_window = MainWindow()
     def excepthook(exc_type, exc_value, exc_tb):

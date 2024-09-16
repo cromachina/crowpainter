@@ -52,7 +52,7 @@ _to_psd_blendmode = { v:k for k,v in _from_psd_blendmode.items() }
 _to_psd_special = { v:k for k,v in _from_psd_special.items() }
 
 def _get_sai_special_mode_opacity(layer:psdl.Layer):
-    blocks = layer._record.tagged_blocks
+    blocks = layer.tagged_blocks
     tsly = blocks.get(psdc.Tag.TRANSPARENCY_SHAPES_LAYER, None)
     iOpa = blocks.get(psdc.Tag.BLEND_FILL_OPACITY, None)
     if tsly and iOpa and tsly.data == 0:
@@ -60,10 +60,15 @@ def _get_sai_special_mode_opacity(layer:psdl.Layer):
     return STORAGE_DTYPE(layer.opacity), _from_psd_blendmode.get(layer.blend_mode, BlendMode.NORMAL)
 
 def _get_protection_settings(layer:psdl.Layer):
-    blocks = layer._record.tagged_blocks
+    blocks = layer.tagged_blocks
     lspf = blocks.get(psdc.Tag.PROTECTED_SETTING, None)
     data = lspf.data if lspf else 0
     return tuple((util.bit(data, bit) for bit in [0, 1, 2, 32]))
+
+def _get_group_folder_settings(layer:psdl.Layer):
+    blocks = layer.tagged_blocks
+    lsct = blocks.get(psdc.Tag.SECTION_DIVIDER_SETTING, None)
+    return lsct.data.kind == psdc.SectionDivider.OPEN_FOLDER
 
 def _get_layer_channel(layer:psdl.Layer, channel):
     data = util.layer_numpy(layer, channel)
@@ -100,7 +105,8 @@ def _get_base_layer_properties(layer:psdl.Layer):
 
 def _get_group_layer_properties(layer:psdl.Layer):
     return {
-        'layers': _build_sublayers(layer)
+        'layers': _build_sublayers(layer),
+        'folder_open': _get_group_folder_settings(layer),
     }
 
 def _get_pixel_layer_properties(layer:psdl.Layer):
