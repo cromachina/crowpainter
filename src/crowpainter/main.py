@@ -303,6 +303,9 @@ class LayerItem(QWidget):
 
         frame = QFrame()
         frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.clip_icon = QLabel()
+        self.clip_icon.setStyleSheet('background-color: deeppink;')
+        self.clip_icon.setMaximumWidth(3)
         self.visible_checkbox = QCheckBox()
         self.visible_checkbox.setStatusTip('Change layer visibility')
         if is_group:
@@ -313,6 +316,7 @@ class LayerItem(QWidget):
             self.icon = QLabel()
         self.text = LayerTextItem()
         layout = QHBoxLayout()
+        layout.addWidget(self.clip_icon)
         layout.addWidget(self.visible_checkbox)
         layout.addWidget(self.icon)
         layout.addWidget(self.text)
@@ -359,6 +363,7 @@ def build_layer_list(layer_list:LayerList, layers:layer_data.GroupLayer):
         is_group = isinstance(layer, layer_data.GroupLayer)
         item = LayerItem(is_group)
         item.layer_id = layer.id
+        item.clip_icon.setVisible(layer.clip)
         item.visible_checkbox.setChecked(layer.visible)
         item.text.layer_name.setText(layer.name)
         item.text.blend_mode.setText(blend_mode_to_str(layer.blend_mode))
@@ -380,7 +385,7 @@ class StatusBar(QStatusBar):
         self.system_memory_bar.setTextVisible(False)
         self.own_memory_bar = QProgressBar()
         self.own_memory_bar.setMaximumWidth(100)
-        self.own_memory_bar.setStyleSheet('background-color: rgba(0,0,0,0);')
+        self.own_memory_bar.setStyleSheet('background-color: transparent;')
         self.disk_bar = QProgressBar()
         self.disk_bar.setMaximumWidth(100)
         layout = QStackedLayout()
@@ -524,7 +529,6 @@ def init_logging():
 
 def main():
     init_logging()
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling)
     app = QApplication(sys.argv)
     main_window = MainWindow()
     def excepthook(exc_type, exc_value, exc_tb):
