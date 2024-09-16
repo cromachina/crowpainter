@@ -206,8 +206,6 @@ class Viewport(QGraphicsView):
         image_w = self.composite_image.shape[1]
         image_h = self.composite_image.shape[0]
         zoom = scroll_zoom_levels[self.zoom]
-        # TODO panning is correct, but zoom and rotation happens about the center of the pic
-        # instead of the center of the screen.
         t = (QTransform()
             .translate(view_w / 2, view_h / 2)
             .rotate(self.rotation)
@@ -265,16 +263,21 @@ class Viewport(QGraphicsView):
             self.first_show = False
             self.fit_canvas_in_view()
 
-    def wheelEvent(self, event: QWheelEvent) -> None:
+    def wheelEvent(self, event:QWheelEvent) -> None:
+        last_zoom = scroll_zoom_levels[self.zoom]
         if event.angleDelta().y() > 0:
             self.zoom += 1
         else:
             self.zoom -= 1
         self.zoom = max(self.zoom, 0)
         self.zoom = min(self.zoom, len(scroll_zoom_levels)-1)
+        next_zoom = scroll_zoom_levels[self.zoom]
+        delta_zoom = next_zoom / last_zoom
+        # TODO Figure out how to apply this to the mouse/pen position
+        self.position = QTransform().scale(delta_zoom, delta_zoom).map(self.position)
         self.apply_transform()
 
-    def keyPressEvent(self, event: QKeyEvent) -> None:
+    def keyPressEvent(self, event:QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_R:
             self.fit_canvas_in_view()
         if event.key() == Qt.Key.Key_BracketLeft:
@@ -286,15 +289,15 @@ class Viewport(QGraphicsView):
             self.rotation %= 360
             self.apply_transform()
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:
+    def mousePressEvent(self, event:QMouseEvent) -> None:
         if event.button() == event.button().LeftButton:
             self.moving_view = True
 
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+    def mouseReleaseEvent(self, event:QMouseEvent) -> None:
         if event.button() == event.button().LeftButton:
             self.moving_view = False
 
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+    def mouseMoveEvent(self, event:QMouseEvent) -> None:
         if self.moving_view:
             delta = event.position() - self.last_mouse_pos
             delta = QTransform().rotate(-self.rotation).map(delta)
