@@ -13,7 +13,7 @@ from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 import PySide6.QtAsyncio as QtAsyncio
 
-from . import layer_data, composite, util
+from . import layer_data, composite, util, blendfuncs
 from .constants import *
 from .file_io import psd, image, native
 
@@ -147,9 +147,14 @@ async def full_composite(canvas:layer_data.Canvas):
     def comp_runner():
         size = canvas.size
         offset = (0, 0)
-        color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
-        alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
+        if canvas.background.transparent:
+            color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
+            alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
+        else:
+            color = np.full(size + (3,), dtype=BLENDING_DTYPE, fill_value=np.array(canvas.background.color) / 255.0)
+            alpha = np.ones(size + (1,), dtype=BLENDING_DTYPE)
         color, alpha = composite.composite(canvas.top_level, offset, (color, alpha))
+        blendfuncs.clip_divide(color, alpha, out=color)
         color *= 255
         color = color.astype(STORAGE_DTYPE)
         alpha *= 255
@@ -180,9 +185,7 @@ class Viewport(QGraphicsView):
         self.composite_image:np.ndarray = initial_composite
         self.last_mouse_pos = QPointF(0, 0)
         self.moving_view = False
-        tex = QBrush(np_to_qimage(make_ideal_checkerboard(0.5, 32)))
         self.canvas_bg_area = QGraphicsPolygonItem()
-        self.canvas_bg_area.setBrush(tex)
         self.canvas_pixmap = QGraphicsPixmapItem()
         self.setScene(QGraphicsScene())
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -194,6 +197,7 @@ class Viewport(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.scene().addItem(self.canvas_bg_area)
         self.scene().addItem(self.canvas_pixmap)
+        self.update_background()
         self.first_show = True
 
     def apply_transform(self):
@@ -237,6 +241,13 @@ class Viewport(QGraphicsView):
             self.canvas_pixmap.setTransformationMode(Qt.TransformationMode.FastTransformation)
             self.canvas_pixmap.resetTransform()
         self.last_zoom = self.zoom
+
+    def update_background(self):
+        bg = self.canvas_state.get_current().background
+        if bg.transparent and bg.checker:
+            self.canvas_bg_area.setBrush(QBrush(np_to_qimage(make_ideal_checkerboard(bg.checker_brightness, 32))))
+        else:
+            self.canvas_bg_area.setBrush(QBrush(QColor(*bg.color, 255)))
 
     def fit_canvas_in_view(self):
         self.position = QPointF()

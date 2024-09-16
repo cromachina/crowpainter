@@ -129,12 +129,37 @@ def _build_sublayers(psd_group) -> GroupLayer:
             layers.append(PixelLayer(**(args | _get_pixel_layer_properties(psd_sublayer))))
     return pvector(layers)
 
+def _is_pure_background(layer:psdl.Layer):
+    alpha = util.layer_numpy(layer, 'shape')
+    alpha_all_1 = True if alpha is None else (alpha == 255).all()
+    if alpha_all_1:
+        color = util.layer_numpy(layer, 'color')
+        full_color = color[0, 0]
+        color_all_eq = (color == full_color).all()
+        return color_all_eq, full_color
+    return False, None
+
 def read(file_path:Path) -> Canvas:
     psd_file = psd_tools.PSDImage.open(str(file_path))
-
+    bg = BackgroundSettings(
+        transparent=True
+    )
+    if len(psd_file) > 0:
+        bg_layer = psd_file[0]
+        if (bg_layer.name == 'Background'
+            and bg_layer.kind == 'pixel'
+            and bg_layer.mask is None
+            and psd_file.size == bg_layer.size):
+            pure, full_color = _is_pure_background(bg_layer)
+            if pure:
+                bg = BackgroundSettings(
+                    color=full_color,
+                )
+                psd_file._layers.pop(0)
     return Canvas(
         size=(psd_file.height, psd_file.width),
-        top_level = _build_sublayers(psd_file),
+        top_level=_build_sublayers(psd_file),
+        background=bg,
     )
 
 # TODO: psd-tools says it doesn't support adding layers to a PSD

@@ -103,10 +103,17 @@ class GroupLayer(BaseLayer):
     def thaw(self):
         return self.set(layers=[layer.thaw() for layer in self.layers])
 
+class BackgroundSettings(PClass):
+    color:tuple = field(initial=(255, 255, 255))
+    transparent:bool = field(initial=False)
+    checker:bool = field(initial=True)
+    checker_brightness:float = field(initial=0.5)
+
 class Canvas(PClass):
     size:IVec2 = field(initial=(0, 0))
     top_level:PVector[BaseLayer] = field(initial=pvector())
     selection:Mask | None = field(initial=None)
+    background:BackgroundSettings = field(initial=BackgroundSettings())
 
     def thaw(self):
         return self.set(
@@ -166,7 +173,7 @@ def prune_tiles(color_tiles:PMap[IVec2, ColorTile], alpha_tiles:PMap[IVec2, Alph
                 new_alpha_tiles[index] = alpha_tile
     return pmap(new_color_tiles), pmap(new_alpha_tiles)
 
-def color_alpha_to_tiles(color:np.ndarray, alpha:float | np.ndarray):
+def color_alpha_to_tiles(color:np.ndarray, alpha:STORAGE_DTYPE | np.ndarray):
     color_tiles = pixel_data_to_tiles(color, ColorTile)
     if np.isscalar(alpha):
         alpha_tiles = scalar_to_tiles(alpha, color.shape[:2] + (1,), AlphaTile)

@@ -12,9 +12,11 @@ def read(file_path:Path) -> Canvas:
     if data.shape[2] == 3:
         color = cv2.cvtColor(data, cv2.COLOR_BGR2RGB)
         alpha = 255
+        bg = BackgroundSettings()
     else:
         data = cv2.cvtColor(data, cv2.COLOR_BGRA2RGBA)
-        color, alpha = np.split(data, [2], axis=2)
+        color, alpha = np.split(data, [3], axis=2)
+        bg = BackgroundSettings(transparent=True)
     data = None
 
     color_tiles, alpha_tiles = color_alpha_to_tiles(color, alpha)
@@ -26,7 +28,8 @@ def read(file_path:Path) -> Canvas:
     )
     return Canvas(
         top_level=GroupLayer(layers=pvector([layer])),
-        size=color.shape[:2]
+        size=color.shape[:2],
+        background=bg,
     )
 
 # TODO extra params: jpg quality, png compression, etc.
