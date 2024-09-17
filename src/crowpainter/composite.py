@@ -93,10 +93,10 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
 
                 if len(clip_layers) != 0:
                     # Composite the clip layers now. This basically overwrites just the color by blending onto it without
-                    # alpha blending it first. For whatever reason, applying a large root to the alpha source before passing
-                    # it to clip compositing fixes brightening that can occur with certain blend modes (like multiply).
-                    corrected_alpha = sub_alpha_src ** 0.0001
-                    sub_color_src, _ = composite(clip_layers, sub_offset, (sub_color_src.copy(), corrected_alpha))
+                    # alpha blending it first.
+                    sub_color_src = np.multiply(sub_color_src, sub_alpha_src, out=check_lock(sub_color_src))
+                    sub_color_src, _ = composite(clip_layers, sub_offset, (sub_color_src, sub_alpha_src.copy()))
+                    sub_color_src = blendfuncs.clip_divide(sub_color_src, sub_alpha_src, out=check_lock(sub_color_src))
 
                 # Apply opacity (fill) before blending otherwise premultiplied blending of special modes will not work correctly.
                 sub_alpha_src = np.multiply(sub_alpha_src, opacity, out=check_lock(sub_alpha_src))
