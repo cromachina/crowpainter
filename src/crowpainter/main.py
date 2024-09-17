@@ -52,9 +52,14 @@ class CanvasState():
         return self.states[self.current_index]
 
     def append(self, state, state_limit:int|None=None):
-        self.states = self.states.append(state)
+        self.states = self.states[:self.current_index + 1]
+        self.states.append(state)
         if state_limit is not None and len(self.states) > state_limit:
-            self.states = self.states.popleft()
+            delta = len(self.states) - state_limit
+            if delta == 1:
+                self.states.popleft()
+            else:
+                self.states = self.states[delta:]
         self.current_index = len(self.states) - 1
 
     def undo(self):
