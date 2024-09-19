@@ -18,7 +18,7 @@ class BaseArrayTile(PClass):
 
     @classmethod
     def from_data(cls, data, lock=True):
-        tile = cls(data, lock)
+        tile = cls(data=data)
         if lock:
             tile.lock()
         return tile
@@ -149,7 +149,7 @@ def pixel_data_to_tiles(data:np.ndarray | None, tile_constructor):
         tile = np.zeros(shape=size + data.shape[2:], dtype=STORAGE_DTYPE)
         util.blit(tile, data, -offset)
         index = tuple(offset // TILE_SIZE)
-        tiles[index] = tile_constructor(data=tile)
+        tiles[index] = tile_constructor.from_data(tile)
     return pmap(tiles)
 
 def scalar_to_tiles(value, shape, tile_constructor):
@@ -157,7 +157,7 @@ def scalar_to_tiles(value, shape, tile_constructor):
     for (size, offset) in util.generate_tiles(shape[:2], TILE_SIZE):
         tile = np.full(shape=size + shape[2:], dtype=STORAGE_DTYPE, fill_value=value)
         index = tuple(np.array(offset) // TILE_SIZE)
-        tiles[index] = tile_constructor(data=tile)
+        tiles[index] = tile_constructor.from_data(tile)
     return pmap(tiles)
 
 def prune_tiles(color_tiles:PMap[IVec2, ColorTile], alpha_tiles:PMap[IVec2, AlphaTile]):

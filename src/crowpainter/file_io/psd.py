@@ -136,7 +136,7 @@ def _is_pure_background(layer:psdl.Layer):
         color = util.layer_numpy(layer, 'color')
         full_color = color[0, 0]
         color_all_eq = (color == full_color).all()
-        return color_all_eq, full_color
+        return color_all_eq, tuple(full_color)
     return False, None
 
 def read(file_path:Path) -> Canvas:

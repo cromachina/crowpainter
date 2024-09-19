@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 import logging
 import traceback
+import time
 
 import cv2
 import numpy as np
@@ -456,6 +457,9 @@ class StatusBar(QStatusBar):
         self.system_memory_bar.setValue(stats.system_memory_usage)
         self.disk_bar.setValue(stats.disk_usage)
 
+image_types = ['crow', 'png', 'psd', 'psb', 'tif', 'tiff', 'jpg', 'jpeg', 'jpe', 'webp', 'bmp', 'dib', 'jp2', 'pbm', 'pgm', 'ppm', 'pnm']
+image_format_str = ' '.join([f'*.{ext}' for ext in image_types])
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -497,9 +501,7 @@ class MainWindow(QMainWindow):
         pass
 
     async def on_open(self):
-        image_types = ['png', 'psd', 'psb', 'tif', 'tiff', 'jpg', 'jpeg', 'jpe', 'webp', 'bmp', 'dib', 'jp2', 'pbm', 'pgm', 'ppm', 'pnm']
-        image_format_str = ' '.join([f'*.{ext}' for ext in image_types])
-        files, _ = QFileDialog.getOpenFileNames(self, caption='Open', filter=f'Images ({image_format_str});;All files (*.*)', dir='.')
+        files, _ = QFileDialog.getOpenFileNames(self, filter=f'Images ({image_format_str});;All files (*.*)', dir='.')
         for file_path in files:
             # TODO check if file is already open and ask to reopen without saving.
             await self.open(file_path)
@@ -508,7 +510,16 @@ class MainWindow(QMainWindow):
         pass
 
     def on_save_as(self):
-        pass
+        widget:Viewport = self.viewport_tab.currentWidget()
+        if widget is None:
+            return
+        else:
+            file_path, _ = QFileDialog.getSaveFileName(self, filter=f'Images ({image_format_str});;All files (*.*)', dir='.')
+            if file_path == '':
+                return
+            s = time.time()
+            self.save(widget.canvas_state.get_current(), file_path)
+            logging.info(f'save {file_path}: {time.time() - s}')
 
     def on_close(self):
         pass
@@ -516,7 +527,9 @@ class MainWindow(QMainWindow):
     async def open(self, file_path):
         file_path = Path(file_path)
         try:
+            s = time.time()
             canvas = await util.peval(lambda: open_file(file_path))
+            logging.info(f'open file read {file_path}: {time.time() - s}')
         except Exception as ex:
             logging.exception(ex)
             show_error_message(traceback.format_exc())
@@ -527,10 +540,23 @@ class MainWindow(QMainWindow):
             file_path=file_path,
             on_filesystem=True
         )
+        s = time.time()
         composite_image = await full_composite(canvas)
+        logging.info(f'open composite {file_path}: {time.time() - s}')
         viewport = Viewport(canvas_state=canvas_state, initial_composite=composite_image)
         index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
         self.viewport_tab.setCurrentIndex(index)
+
+    def save(self, canvas:layer_data.Canvas, file_path):
+        file_path = Path(file_path)
+        try:
+            file_type = file_path.suffix
+            if file_type == '.crow':
+                native.write(canvas, file_path)
+        except Exception as ex:
+            logging.exception(ex)
+            show_error_message(traceback.format_exc())
+            return
 
     def create_menu_action(self, menu:QMenu, text:str, callback, enabled=True):
         action = QAction(text=text, parent=self)
