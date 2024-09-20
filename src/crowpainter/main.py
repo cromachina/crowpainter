@@ -13,10 +13,18 @@ from PySide6.QtCore import *
 from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 import PySide6.QtAsyncio as QtAsyncio
+import psutil
 
 from . import layer_data, composite, util, blendfuncs
 from .constants import *
 from .file_io import psd, image, native
+from .qthreadpoolexecutor import QThreadPoolExecutor
+
+worker_count = psutil.cpu_count(False)
+pool = QThreadPoolExecutor(worker_count)
+
+def qt_peval(func):
+    return QtAsyncio.asyncio.get_running_loop().run_in_executor(pool, func)
 
 class ExtendedInfoMessage(QDialog):
     def __init__(self, parent=None, title='', text=''):
@@ -80,8 +88,10 @@ class CanvasState():
     def is_saved(self):
         return id(self.saved_state) == id(self.get_current())
 
-    def set_saved(self):
-        self.saved_state = self.get_current()
+    def set_saved(self, state=None):
+        if state is None:
+            state = self.get_current()
+        self.saved_state = state
 
 def np_to_qimage(img):
     h, w, d = img.shape
@@ -509,7 +519,7 @@ class MainWindow(QMainWindow):
     def on_save(self):
         pass
 
-    def on_save_as(self):
+    async def on_save_as(self):
         widget:Viewport = self.viewport_tab.currentWidget()
         if widget is None:
             return
@@ -518,7 +528,16 @@ class MainWindow(QMainWindow):
             if file_path == '':
                 return
             s = time.time()
-            self.save(widget.canvas_state.get_current(), file_path)
+            prog = QProgressBar()
+            self.statusBar().addWidget(prog)
+            current_canvas = widget.canvas_state.get_current()
+            class SigHolder(QObject):
+                update_progress = Signal(float)
+            sig = SigHolder()
+            sig.update_progress.connect(lambda f: prog.setValue(int(f * 100)))
+            result = await qt_peval(lambda: self.save(current_canvas, file_path, sig.update_progress.emit))
+            self.statusBar().removeWidget(prog)
+            widget.canvas_state.set_saved(current_canvas)
             logging.info(f'save {file_path}: {time.time() - s}')
 
     def on_close(self):
@@ -547,16 +566,17 @@ class MainWindow(QMainWindow):
         index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
         self.viewport_tab.setCurrentIndex(index)
 
-    def save(self, canvas:layer_data.Canvas, file_path):
-        file_path = Path(file_path)
+    def save(self, canvas:layer_data.Canvas, file_path, progress_update_callback):
         try:
+            file_path = Path(file_path)
             file_type = file_path.suffix
             if file_type == '.crow':
-                native.write(canvas, file_path)
+                native.write(canvas, file_path, progress_update_callback)
+            return True
         except Exception as ex:
             logging.exception(ex)
             show_error_message(traceback.format_exc())
-            return
+            return False
 
     def create_menu_action(self, menu:QMenu, text:str, callback, enabled=True):
         action = QAction(text=text, parent=self)
@@ -571,7 +591,7 @@ class MainWindow(QMainWindow):
         self.action_new = self.create_menu_action(menu_file, '&New ...', self.on_new)
         self.action_open = self.create_menu_action(menu_file, '&Open ...', lambda: asyncio.ensure_future(self.on_open()))
         self.action_save = self.create_menu_action(menu_file, '&Save ...', self.on_save)
-        self.action_save_as = self.create_menu_action(menu_file, 'Save &As ...', self.on_save_as)
+        self.action_save_as = self.create_menu_action(menu_file, 'Save &As ...', lambda: asyncio.ensure_future(self.on_save_as()))
         self.action_close = self.create_menu_action(menu_file, '&Close ...', self.on_close)
 
         menu_edit = menu.addMenu('&Edit')

@@ -26,17 +26,44 @@ def _serialize_numpy_number(obj):
     else:
         raise TypeError(obj)
 
+def count_tiles(layers):
+    count = 0
+    for layer in layers:
+        if isinstance(layer, PixelLayer):
+            count += len(layer.color) + len(layer.alpha)
+        if isinstance(layer, GroupLayer):
+            count += count_tiles(layer.layers)
+        if layer.mask is not None:
+            count += len(layer.mask.alpha)
+    return count
+
+class _SerializeConfig():
+    def __init__(self, zip_file:zipfile.ZipFile, progress_count:int, progress_callback) -> None:
+        self.zip_file = zip_file
+        self.current_count = 0
+        self.progress_count = progress_count
+        self.progress_callback = progress_callback
+        self.id_gen = _id_generator()
+
+    def progress_update(self):
+        if self.progress_callback is not None:
+            self.current_count += 1
+            self.progress_callback(self.current_count / self.progress_count)
+
+    def next_id(self):
+        return next(self.id_gen)
+
 def _read_ndarray(array, zip:zipfile.ZipFile):
     bytes = zip.read(array['data_path'])
     return np.frombuffer(bytes, dtype=STORAGE_DTYPE).reshape(array['shape'])
 
-def _write_ndarray(array:np.ndarray, zip:zipfile.ZipFile, id_gen):
-    data_path = next(id_gen)
+def _write_ndarray(array:np.ndarray, config:_SerializeConfig):
+    data_path = config.next_id()
     array_data = {
         'shape': array.shape,
         'data_path': data_path
     }
-    zip.writestr(data_path, array.tobytes())
+    config.zip_file.writestr(data_path, array.tobytes())
     return array_data
 
 def _read_tile_data(tiles, zip:zipfile.ZipFile):
@@ -53,7 +80,7 @@ def _read_tile_data(tiles, zip:zipfile.ZipFile):
         tile_map_data[tuple(tile['index'])] = tile_data
     return pmap(tile_map_data)
 
-def _write_tile_data(tiles:PMap[IVec2, BaseArrayTile | FillTile], zip:zipfile.ZipFile, id_gen):
+def _write_tile_data(tiles:PMap[IVec2, BaseArrayTile | FillTile], config:_SerializeConfig):
     tile_map_data = []
     for index, tile in tiles.items():
         tile_data = {
@@ -64,8 +91,9 @@ def _write_tile_data(tiles:PMap[IVec2, BaseArrayTile | FillTile], zip:zipfile.Zi
             tile_data['size'] = tile.size
             tile_data['value'] = tile.value
         else:
-            tile_data['data'] = _write_ndarray(tile.data, zip, id_gen)
+            tile_data['data'] = _write_ndarray(tile.data, config)
         tile_map_data.append(tile_data)
+        config.progress_update()
     return tile_map_data
 
 def _read_mask(mask, zip:zipfile.ZipFile):
@@ -78,12 +106,12 @@ def _read_mask(mask, zip:zipfile.ZipFile):
         background_color=mask['background_color'],
     )
 
-def _write_mask(mask:Mask | None, zip:zipfile.ZipFile, id_gen):
+def _write_mask(mask:Mask | None, config:_SerializeConfig):
     if mask is None:
         return None
     return {
         'position': mask.position,
-        'alpha': _write_tile_data(mask.alpha, zip, id_gen),
+        'alpha': _write_tile_data(mask.alpha, config),
         'visible': mask.visible,
         'background_color': mask.background_color,
     }
@@ -115,7 +143,7 @@ def _read_sublayers(layers, zip:zipfile.ZipFile):
         layer_data.append(layer_constructor(**layer_args))
     return pvector(layer_data)
 
-def _write_sublayers(layers:GroupLayer | list[BaseLayer], zip:zipfile.ZipFile, id_gen):
+def _write_sublayers(layers:GroupLayer | list[BaseLayer], config):
     layers_data = []
     for sublayer in layers:
         sublayer_data = {
@@ -130,14 +158,14 @@ def _write_sublayers(layers:GroupLayer | list[BaseLayer], zip:zipfile.ZipFile, i
             'lock_all': sublayer.lock_all,
             'clip': sublayer.clip,
             'id': sublayer.id,
-            'mask': _write_mask(sublayer.mask, zip, id_gen)
+            'mask': _write_mask(sublayer.mask, config)
         }
         if isinstance(sublayer, PixelLayer):
-            sublayer_data['color'] = _write_tile_data(sublayer.color, zip, id_gen)
-            sublayer_data['alpha'] = _write_tile_data(sublayer.alpha, zip, id_gen)
+            sublayer_data['color'] = _write_tile_data(sublayer.color, config)
+            sublayer_data['alpha'] = _write_tile_data(sublayer.alpha, config)
             sublayer_data['position'] = sublayer.position
         elif isinstance(sublayer, GroupLayer):
-            sublayer_data['layers'] = _write_sublayers(sublayer.layers, zip, id_gen)
+            sublayer_data['layers'] = _write_sublayers(sublayer.layers, config)
             sublayer_data['folder_open'] = sublayer.folder_open
         layers_data.append(sublayer_data)
     return layers_data
@@ -152,25 +180,28 @@ def read(file_path:Path) -> Canvas:
             selection=_read_mask(canvas_data['selection'], zip)
         )
 
-def write(canvas:Canvas, file_path:Path):
+def write(canvas:Canvas, file_path:Path, progress_callback=None):
     with tempfile.NamedTemporaryFile(dir=file_path.parent, prefix=file_path.name, delete=False, delete_on_close=False) as temp:
         try:
-            zip = zipfile.ZipFile(temp, 'w', compresslevel=9, compression=zipfile.ZIP_DEFLATED)
-            id_gen = _id_generator()
+            config = _SerializeConfig(
+                zip_file=zipfile.ZipFile(temp, 'w', compresslevel=5, compression=zipfile.ZIP_DEFLATED),
+                progress_count=count_tiles(canvas.top_level),
+                progress_callback=progress_callback,
+            )
             canvas_data = {
                 'version': VERSION,
                 'size': canvas.size,
-                'top_level': _write_sublayers(canvas.top_level, zip, id_gen),
+                'top_level': _write_sublayers(canvas.top_level, config),
                 'background': {
                     'color': canvas.background.color,
                     'transparent': canvas.background.transparent,
                     'checker': canvas.background.checker,
                     'checker_brightness': canvas.background.checker_brightness,
                 },
-                'selection': _write_mask(canvas.selection, zip, id_gen),
+                'selection': _write_mask(canvas.selection, config),
             }
-            zip.writestr('canvas', json.dumps(canvas_data, default=_serialize_numpy_number))
-            zip.close()
+            config.zip_file.writestr('canvas', json.dumps(canvas_data, default=_serialize_numpy_number))
+            config.zip_file.close()
             Path(temp.name).rename(file_path)
         except Exception as ex:
             temp.close()
