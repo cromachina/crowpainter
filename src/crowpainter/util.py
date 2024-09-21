@@ -109,7 +109,7 @@ def _parse_array(data, depth, lut=None):
         raise ValueError("Unsupported depth: %g" % depth)
 
 def layer_numpy(layer:Layer, channel=None):
-    if channel == 'mask' and (not layer.mask or layer.mask.size != (0, 0)):
+    if channel == 'mask' and (not layer.mask or layer.mask.size == (0, 0)):
         return None
 
     depth = layer._psd.depth
