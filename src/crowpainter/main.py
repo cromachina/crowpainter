@@ -5,6 +5,8 @@ from collections import deque
 import logging
 import traceback
 import time
+import threading
+import contextlib
 
 import cv2
 import numpy as np
@@ -23,8 +25,16 @@ from .qthreadpoolexecutor import QThreadPoolExecutor
 worker_count = psutil.cpu_count(False)
 pool = QThreadPoolExecutor(worker_count)
 
-def qt_peval(func):
+def peval(func):
     return QtAsyncio.asyncio.get_running_loop().run_in_executor(pool, func)
+
+@contextlib.contextmanager
+def timeit(message):
+    start = time.monotonic()
+    try:
+        yield
+    finally:
+        logging.info(f'{message}: {time.monotonic() - start}')
 
 class ExtendedInfoMessage(QDialog):
     def __init__(self, parent=None, title='', text=''):
@@ -158,25 +168,46 @@ def matrix_to_QTransform(matrix:np.ndarray) -> QTransform:
     t = QTransform().setMatrix(m[0,0], m[0,1], m[0,2], m[1,0], m[1,1], m[1,2], m[2,0], m[2,1], m[2,2])
     return t
 
-async def full_composite(canvas:layer_data.Canvas):
-    # TODO: Test dispatching parallel tile workers.
-    def comp_runner():
+async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=None, offset:layer_data.IVec2=(0, 0), progress_callback=None):
+    if progress_callback is None:
+        progress_callback = lambda _: None
+    if size is None:
         size = canvas.size
-        offset = (0, 0)
-        if canvas.background.transparent:
-            color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
-            alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
-        else:
-            color = np.full(size + (3,), dtype=BLENDING_DTYPE, fill_value=np.array(canvas.background.color) / 255.0)
-            alpha = np.ones(size + (1,), dtype=BLENDING_DTYPE)
-        color, alpha = composite.composite(canvas.top_level, offset, (color, alpha))
+    if canvas.background.transparent:
+        color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
+        alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
+    else:
+        color = np.full(size + (3,), dtype=BLENDING_DTYPE, fill_value=np.array(canvas.background.color) / 255.0)
+        alpha = np.ones(size + (1,), dtype=BLENDING_DTYPE)
+
+    lock = threading.Lock()
+    tiles = list(util.generate_tiles(size, TILE_SIZE))
+    progress_count = 0
+    progress_total = len(tiles)
+
+    def tile_task(size, offset):
+        nonlocal progress_count
+        tile_color = util.get_overlap_view(color, size, offset)
+        tile_alpha = util.get_overlap_view(alpha, size, offset)
+        composite.composite(canvas.top_level, offset, (tile_color, tile_alpha))
+        with lock:
+            progress_count += 1
+        progress_callback(progress_count / progress_total)
+
+    tasks = []
+    for (tile_size, tile_offset) in tiles:
+        tasks.append(peval(lambda ts=tile_size, to=tile_offset: tile_task(ts, to)))
+    await asyncio.gather(*tasks)
+
+    def final():
+        nonlocal color, alpha
         blendfuncs.clip_divide(color, alpha, out=color)
         color *= 255
         color = color.astype(STORAGE_DTYPE)
         alpha *= 255
         alpha = alpha.astype(STORAGE_DTYPE)
         return np.dstack((color, alpha))
-    return await util.peval(comp_runner)
+    return await peval(final)
 
 def make_checkerboard_texture(check_a, check_b, size):
     check_a = util.clamp(0, 255, check_a)
@@ -519,6 +550,19 @@ class MainWindow(QMainWindow):
     def on_save(self):
         pass
 
+    @contextlib.contextmanager
+    def progress_bar(self):
+        try:
+            prog = QProgressBar()
+            self.statusBar().addWidget(prog)
+            class SigHolder(QObject):
+                update_progress = Signal(float)
+            sig = SigHolder()
+            sig.update_progress.connect(lambda f: prog.setValue(int(f * 100)))
+            yield sig.update_progress.emit
+        finally:
+            self.statusBar().removeWidget(prog)
+
     async def on_save_as(self):
         widget:Viewport = self.viewport_tab.currentWidget()
         if widget is None:
@@ -527,51 +571,41 @@ class MainWindow(QMainWindow):
             file_path, _ = QFileDialog.getSaveFileName(self, filter=f'Images ({image_format_str});;All files (*.*)', dir='.')
             if file_path == '':
                 return
-            s = time.time()
-            prog = QProgressBar()
-            self.statusBar().addWidget(prog)
             current_canvas = widget.canvas_state.get_current()
-            class SigHolder(QObject):
-                update_progress = Signal(float)
-            sig = SigHolder()
-            sig.update_progress.connect(lambda f: prog.setValue(int(f * 100)))
-            result = await qt_peval(lambda: self.save(current_canvas, file_path, sig.update_progress.emit))
-            self.statusBar().removeWidget(prog)
+            with self.progress_bar() as callback, timeit(f'save {file_path}'):
+                result = await peval(lambda: self.save(current_canvas, file_path, callback))
             widget.canvas_state.set_saved(current_canvas)
-            logging.info(f'save {file_path}: {time.time() - s}')
 
     def on_close(self):
         pass
 
     async def open(self, file_path):
         file_path = Path(file_path)
-        try:
-            s = time.time()
-            canvas = await util.peval(lambda: open_file(file_path))
-            logging.info(f'open file read {file_path}: {time.time() - s}')
-        except Exception as ex:
-            logging.exception(ex)
-            show_error_message(traceback.format_exc())
-            return
+        with self.progress_bar() as callback, timeit(f'open {file_path}'):
+            try:
+                with timeit(f'open file read {file_path}'):
+                    canvas = await peval(lambda: open_file(file_path))
+            except Exception as ex:
+                logging.exception(ex)
+                show_error_message(traceback.format_exc())
+                return
+            canvas_state = CanvasState(
+                initial_state=canvas,
+                file_path=file_path,
+                on_filesystem=True
+            )
+            with timeit(f'open composite {file_path}'):
+                composite_image = await parallel_composite(canvas, progress_callback=callback)
+            viewport = Viewport(canvas_state=canvas_state, initial_composite=composite_image)
+            index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
+            self.viewport_tab.setCurrentIndex(index)
 
-        canvas_state = CanvasState(
-            initial_state=canvas,
-            file_path=file_path,
-            on_filesystem=True
-        )
-        s = time.time()
-        composite_image = await full_composite(canvas)
-        logging.info(f'open composite {file_path}: {time.time() - s}')
-        viewport = Viewport(canvas_state=canvas_state, initial_composite=composite_image)
-        index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
-        self.viewport_tab.setCurrentIndex(index)
-
-    def save(self, canvas:layer_data.Canvas, file_path, progress_update_callback):
+    def save(self, canvas:layer_data.Canvas, file_path, progress_callback):
         try:
             file_path = Path(file_path)
             file_type = file_path.suffix
             if file_type == '.crow':
-                native.write(canvas, file_path, progress_update_callback)
+                native.write(canvas, file_path, progress_callback)
             return True
         except Exception as ex:
             logging.exception(ex)

@@ -14,7 +14,6 @@
 # Alternatively, just do it the dumb way since most brush strokes are probably small enough for it
 
 from . import blendfuncs, util
-from .util import peval
 from .constants import *
 from .layer_data import *
 

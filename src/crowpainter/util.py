@@ -9,12 +9,6 @@ from psd_tools.api.layers import Layer
 
 from .file_io import rle
 
-worker_count = psutil.cpu_count(False)
-pool = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix='WorkerThread')
-
-def peval(func):
-    return asyncio.get_running_loop().run_in_executor(pool, func)
-
 def generate_tiles(size, tile_size):
     height, width = size
     tile_height, tile_width = tile_size
