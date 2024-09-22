@@ -127,16 +127,17 @@ def get_overlap_regions(tiles:PMap[IVec2, BaseArrayTile | FillTile], tiles_offse
     for point in util.generate_points(target_buffer.shape[:2], TILE_SIZE):
         point_offset = np.array(point) - relative_offset
         tile_index = point_offset // TILE_SIZE
-        region_offset = (tile_index * TILE_SIZE) + relative_offset
-        region = tiles.get(tuple(tile_index))
-        if region is not None:
-            if isinstance(region, FillTile):
-                overlap_tiles = (util.get_overlap_view(target_buffer, region.size, tuple(region_offset)), region.value)
+        tile_offset = (tile_index * TILE_SIZE) + relative_offset
+        tile = tiles.get(tuple(tile_index))
+        if tile is not None:
+            if isinstance(tile, FillTile):
+                overlap_tiles = (util.get_overlap_view(target_buffer, tile.size, tuple(tile_offset)), tile.value)
             else:
-                overlap_tiles = util.get_overlap_tiles(target_buffer, region.data, tuple(region_offset))
+                overlap_tiles = util.get_overlap_tiles(target_buffer, tile.data, tuple(tile_offset))
             overlap_shape = overlap_tiles[0].shape[:2]
             if overlap_shape[0] != 0 and overlap_shape[1] != 0:
-                absolute_offset = np.array(target_offset) + region_offset
+                tile_abs_offset = tile_index * TILE_SIZE + tiles_offset
+                absolute_offset = np.maximum(np.array(target_offset), tile_abs_offset)
                 regions[tuple(absolute_offset)] = overlap_tiles
     return regions
 
