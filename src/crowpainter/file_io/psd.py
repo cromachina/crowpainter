@@ -4,6 +4,7 @@ import psd_tools
 import psd_tools.constants as psdc
 import psd_tools.api.layers as psdl
 
+from ..file_io import rle
 from .. import util
 from ..layer_data import *
 from ..constants import *
@@ -51,6 +52,67 @@ _from_psd_special = {
 _to_psd_blendmode = { v:k for k,v in _from_psd_blendmode.items() }
 _to_psd_special = { v:k for k,v in _from_psd_special.items() }
 
+def _parse_array(data, depth, lut=None):
+    if depth == 8:
+        parsed = np.frombuffer(data, ">u1")
+        if lut is not None:
+            parsed = lut[parsed]
+        return parsed
+    elif depth == 16:
+        return (np.frombuffer(data, ">u2") / 256).astype(np.uint8)
+    elif depth == 32:
+        return (np.frombuffer(data, ">f4") * 256).astype(np.uint8)
+    elif depth == 1:
+        return np.unpackbits(np.frombuffer(data, np.uint8))
+    else:
+        raise ValueError("Unsupported depth: %g" % depth)
+
+def _layer_numpy(layer:psdl.Layer, channel=None):
+    if channel == 'mask' and (not layer.mask or layer.mask.size == (0, 0)):
+        return None
+
+    depth = layer._psd.depth
+    version = layer._psd.version
+
+    def channel_matches(info):
+        if channel == 'color':
+            return info.id >= 0
+        if channel == 'shape':
+            return info.id == psdc.ChannelID.TRANSPARENCY_MASK
+        if channel == 'mask':
+            if not layer.mask:
+                return False
+            if layer.mask._has_real():
+                return info.id == psdc.ChannelID.REAL_USER_LAYER_MASK
+            else:
+                return info.id == psdc.ChannelID.USER_LAYER_MASK
+        else:
+            raise ValueError(f'Unknown channel type: {channel}')
+
+    channels = zip(layer._channels, layer._record.channel_info)
+    channels = [channel for channel, info in channels if channel_matches(info)]
+
+    if len(channels) == 0:
+        return None
+
+    # Use the psd-tools path if we are not decoding RLE
+    if not all([channel.compression == psdc.Compression.RLE for channel in channels]):
+        data = layer.numpy(channel)
+        if data is not None:
+            data = (data * 255.0).astype(np.uint8)
+        return data
+
+    if channel == 'mask':
+        width, height = layer.mask.width, layer.mask.height
+    else:
+        width, height = layer.width, layer.height
+
+    decoded = []
+    for channel in channels:
+        decoded.append(_parse_array(rle.decode_rle(channel.data, width, height, depth, version), depth))
+
+    return np.stack(decoded, axis=1).reshape((height, width, -1))
+
 def _get_sai_special_mode_opacity(layer:psdl.Layer):
     blocks = layer.tagged_blocks
     tsly = blocks.get(psdc.Tag.TRANSPARENCY_SHAPES_LAYER, None)
@@ -71,7 +133,7 @@ def _get_group_folder_settings(layer:psdl.Layer):
     return lsct.data.kind == psdc.SectionDivider.OPEN_FOLDER
 
 def _get_layer_channel(layer:psdl.Layer, channel):
-    data = util.layer_numpy(layer, channel)
+    data = _layer_numpy(layer, channel)
     tile_type = ColorTile if channel == 'color' else AlphaTile
     return pixel_data_to_tiles(data, tile_type)
 
@@ -130,10 +192,10 @@ def _build_sublayers(psd_group) -> GroupLayer:
     return pvector(layers)
 
 def _is_pure_background(layer:psdl.Layer):
-    alpha = util.layer_numpy(layer, 'shape')
+    alpha = _layer_numpy(layer, 'shape')
     alpha_all_1 = True if alpha is None else (alpha == 255).all()
     if alpha_all_1:
-        color = util.layer_numpy(layer, 'color')
+        color = _layer_numpy(layer, 'color')
         full_color = color[0, 0]
         color_all_eq = (color == full_color).all()
         return color_all_eq, tuple(full_color)
