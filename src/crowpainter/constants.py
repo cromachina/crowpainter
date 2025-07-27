@@ -3,7 +3,7 @@ import numpy as np
 
 TILE_SIZE = (256, 256)
 STORAGE_DTYPE = np.uint8
-BLENDING_DTYPE = np.float64
+BLENDING_DTYPE = np.float32
 
 class BlendMode(Enum):
     PASS = auto()
