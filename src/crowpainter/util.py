@@ -31,7 +31,7 @@ def convert(value, dtype):
         if b > a:
             return dtype(value) * dtype(b // a)
         else:
-            return dtype(value // dtype(a // b))
+            return dtype(value // (a // b))
     if is_floating(value) and is_integer(dtype):
         return dtype(value * np.iinfo(dtype).max)
     if is_integer(value) and is_floating(dtype):

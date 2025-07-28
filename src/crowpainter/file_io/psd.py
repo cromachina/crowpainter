@@ -197,14 +197,12 @@ def _is_pure_background(layer:psdl.Layer):
         color = _layer_numpy(layer, 'color')
         full_color = color[0, 0]
         color_all_eq = (color == full_color).all()
-        return color_all_eq, tuple(full_color)
+        return color_all_eq, np.array(full_color, dtype=STORAGE_DTYPE)
     return False, None
 
 def read(file_path:Path) -> Canvas:
     psd_file = psd_tools.PSDImage.open(str(file_path))
-    bg = BackgroundSettings(
-        transparent=True
-    )
+    bg = BackgroundSettings(transparent=True)
     if len(psd_file) > 0:
         bg_layer = psd_file[0]
         if (bg_layer.name == 'Background'
@@ -213,9 +211,7 @@ def read(file_path:Path) -> Canvas:
             and psd_file.size == bg_layer.size):
             pure, full_color = _is_pure_background(bg_layer)
             if pure:
-                bg = BackgroundSettings(
-                    color=full_color,
-                )
+                bg = BackgroundSettings(color=full_color)
                 psd_file._layers.pop(0)
     return Canvas(
         size=(psd_file.height, psd_file.width),
