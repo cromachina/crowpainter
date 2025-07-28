@@ -506,7 +506,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle('CrowPainter')
         self.setGeometry(0, 0, 1000, 1000)
-        self.create_menus()
         self.viewport_tab = QTabWidget(self)
         self.viewport_tab.setTabsClosable(True)
         self.viewport_tab.tabCloseRequested.connect(self.on_tab_close_requested)
@@ -519,6 +518,8 @@ class MainWindow(QMainWindow):
         self.scroll_area = QScrollArea(self.layer_panel_dock)
         self.scroll_area.setWidgetResizable(True)
         self.layer_panel_dock.setWidget(self.scroll_area)
+
+        self.create_menus()
 
     def on_tab_close_requested(self, index):
         widget = self.viewport_tab.widget(index)
@@ -616,6 +617,17 @@ class MainWindow(QMainWindow):
         menu.addAction(action)
         return action
 
+    def create_menu_widget_toggle_action(self, menu, widget, text):
+        def callback():
+            widget.setHidden(not widget.isHidden())
+            set_menu_item_text()
+        action = self.create_menu_action(menu, text, callback)
+        def set_menu_item_text():
+            prefix = 'Show' if widget.isHidden() else 'Hide'
+            action.setText(f'{prefix} {text}')
+        set_menu_item_text()
+        return action
+
     def create_menus(self):
         menu = self.menuBar()
         menu_file = menu.addMenu('&File')
@@ -633,6 +645,8 @@ class MainWindow(QMainWindow):
         menu_selection = menu.addMenu('&Selection')
         self.menu_view = menu.addMenu('&View')
         menu_window = menu.addMenu('&Window')
+
+        self.action_show_layer_panel = self.create_menu_widget_toggle_action(menu_window, self.layer_panel_dock, '&Layer Panel')
 
 def open_file(file_path:Path):
     file_type = file_path.suffix
