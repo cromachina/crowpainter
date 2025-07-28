@@ -1,4 +1,7 @@
 import psutil
+import weakref
+import gc
+from collections import Counter
 import numpy as np
 from pyrsistent import *
 from . import constants
@@ -126,3 +129,39 @@ def get_system_stats():
         system_memory_usage = int(mem_stats.percent),
         disk_usage = int(disk_used / disk_total * 100),
     )
+
+def trackfinal(obj, message):
+    weakref.finalize(obj, print, "finalized:", message)
+
+def memory_usage():
+    return psutil.Process().memory_info().rss
+
+def get_gc_object_stats():
+    stats = Counter()
+    for obj in gc.get_objects():
+        stats[type(obj)] += 1
+    return stats
+
+def get_changed_stats(stats_old, stats_new):
+    all_stats = (stats_old | stats_new).keys()
+    stats = {}
+    for stat in all_stats:
+        delta = stats_new[stat] - stats_old[stat]
+        current = stats_new[stat]
+        stats[stat] = (delta, current)
+    return stats
+
+def print_gc_object_stats(stats):
+    print('Objects:')
+    for stat, count in sorted(stats.items(), key=lambda x: str(x[0])):
+        if count[0] != 0:
+            print(f'  ({count[0]:+}, {count[1]}): {stat}')
+
+_current_gc_stats = get_gc_object_stats()
+
+def update_memory_tracking():
+    global _current_gc_stats
+    old_stats = _current_gc_stats
+    _current_gc_stats = get_gc_object_stats()
+    print_gc_object_stats(get_changed_stats(old_stats, _current_gc_stats))
+    print(f'Memory usage: {memory_usage()}')
