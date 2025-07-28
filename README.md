@@ -1,19 +1,15 @@
 # Crowpainter
 The goal for this project is to make a drawing program that is similar in feel, functionality, and performance to Paint Tool SAI, but is also multi-platform, open source, and has support for scripts and plugins.
 
-# Developer setup
-- If using Nix:
-    - Run `nix develop`
-- Otherwise you have to install some dependencies manually:
-    - Install a C compiler (needed for Cython files)
-    - Install Python 3.12
-    - Install poetry into a venv, instructions here: https://python-poetry.org/docs/
-- Run `poetry install` to get Python dependencies and build Cython files `.pyx` (repeat after changing any Cython files).
+### Installation from source
+- Install python: https://www.python.org/downloads/
+- Install project: `pip install -e .`
+- Run with: `crowpainter`
+- If exporting doesn't work, you may also need to install ffmpeg: https://www.gyan.dev/ffmpeg/builds/#release-builds
+  - You can add the bin directory to your path, or copy ffmpeg.exe to the script folder.
 
-# Running/Debugging developer build
-- From a CLI:
-    - Run `poetry run crowpainter`
-    - If using Nix, you can also run `nix run`
+### Building/installing with Nix
+- This project is a Nix flake, so you can run flake commands to interact with the package `nix run`, `nix build`, etc.
 - Debugging/developing with vscode:
     - If using Nix, start vscode from the repo directory after entering the dev shell: `code .`
     - A launch config is already included for this repo.

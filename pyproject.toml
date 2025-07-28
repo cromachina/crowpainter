@@ -1,38 +1,40 @@
-[tool.poetry]
+[build-system]
+requires = ["setuptools", "wheel", "cython", "numpy"]
+build-backend = "setuptools.build_meta"
+
+[project]
 name = "crowpainter"
 version = "0.0.0"
-description = "Illustration and painting tool"
-authors = ["cromachina"]
-readme = "README.md"
+authors = [
+    { name = "cromachina" }
+]
 license = "GPL-3.0-or-later"
-packages = [{ include = "src/crowpainter" }]
+description = "Illustration and painting tool"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "cython",
+    "psutil",
+    "psd_tools",
+    "opencv-python",
+    "numpy",
+    "pyrsistent",
+    "PySide6"
+]
 keywords = ["art", "painting", "drawing", "illustration"]
 classifiers = [
-    'Intended Audience :: End Users/Desktop',
-    'License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)',
-    'Programming Language :: Python',
-    'Programming Language :: Python :: 3 :: Only',
-    'Topic :: Artistic Software',
-    'Topic :: Multimedia :: Graphics',
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Artistic Software",
+    "Topic :: Multimedia :: Graphics",
 ]
 
-[tool.poetry.dependencies]
-python = "3.12.*"
-cython = "*"
-psutil = "*"
-psd-tools = "*"
-opencv-python = "*"
-numpy = "*"
-pyrsistent = "*"
-PySide6 = "*"
+[project.scripts]
+crowpainter = 'crowpainter.main:main'
 
-[tool.poetry.scripts]
-crowpainter = 'src.crowpainter.main:main'
+[tool.setuptools.packages.find]
+where = ["src"]
 
-[build-system]
-requires = ["poetry-core", "cython", "setuptools", "numpy"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry.build]
-generate-setup-file = false
-script = 'build.py'
+[tool.setuptools.package-data]
+crowpainter = ["*.pyx"]
