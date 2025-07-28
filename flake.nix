@@ -1,6 +1,4 @@
 {
-  description = "Illustration and painting tool";
-
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -44,6 +42,9 @@
           editablePackage
           pyPkgs.build
         ];
+        shellHook = ''
+          build-cython() python setup.py build_ext --inplace
+        '';
       };
     }
   );
