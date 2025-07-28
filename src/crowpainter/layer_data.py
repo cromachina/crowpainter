@@ -14,7 +14,7 @@ class SelectableObject(PClass):
     id:int = field(initial=0)
 
 class BaseArrayTile(PClass):
-    data:np.ndarray = field(mandatory=True)
+    data:np.ndarray = field(mandatory=True, factory=util.to_storage_dtype)
 
     @classmethod
     def from_data(cls, data, lock=True):
@@ -36,17 +36,20 @@ class AlphaTile(BaseArrayTile):
 
 class FillTile(PClass):
     size:IVec2 = field()
-    value:tuple | STORAGE_DTYPE = field()
+    value:np.ndarray | STORAGE_DTYPE = field(factory=util.to_storage_dtype)
 
 class Mask(SelectableObject):
     position:IVec2 = field(initial=(0, 0))
     alpha:PMap[IVec2, AlphaTile] = field(initial=pmap())
     visible:bool = field(initial=True)
-    background_color:STORAGE_DTYPE = field(initial=0)
+    background_color:STORAGE_DTYPE = field(initial=STORAGE_DTYPE(0), factory=util.to_storage_dtype)
 
     def get_mask_data(self, target_alpha_buffer:np.ndarray, target_offset:IVec2):
-        mask = np.full(target_alpha_buffer.shape, self.background_color)
-        for region in get_overlap_regions(self.alpha, self.position, mask, target_offset).values():
+        mask = np.full(target_alpha_buffer.shape, self.background_color, dtype=STORAGE_DTYPE)
+        masks = get_overlap_regions(self.alpha, self.position, mask, target_offset)
+        if not masks:
+            return None
+        for region in masks.values():
             np.copyto(*region)
         return mask
 
@@ -57,7 +60,7 @@ class BaseLayer(SelectableObject):
     name:str = field(initial="")
     blend_mode:BlendMode = field(initial=BlendMode.NORMAL)
     visible:bool = field(initial=True)
-    opacity:float = field(initial=255)
+    opacity:float = field(initial=1.0)
     lock_alpha:bool = field(initial=False)
     lock_draw:bool = field(initial=False)
     lock_move:bool = field(initial=False)
@@ -104,7 +107,7 @@ class GroupLayer(BaseLayer):
         return self.set(layers=[layer.thaw() for layer in self.layers])
 
 class BackgroundSettings(PClass):
-    color:tuple = field(initial=(255, 255, 255))
+    color:tuple = field(initial=np.full(shape=(3,), fill_value=STORAGE_DTYPE_MAX, dtype=STORAGE_DTYPE), factory=util.to_storage_dtype)
     transparent:bool = field(initial=False)
     checker:bool = field(initial=True)
     checker_brightness:float = field(initial=0.5)
@@ -156,7 +159,7 @@ def pixel_data_to_tiles(data:np.ndarray | None, tile_constructor):
 def scalar_to_tiles(value, shape, tile_constructor):
     tiles = {}
     for (size, offset) in util.generate_tiles(shape[:2], TILE_SIZE):
-        tile = np.full(shape=size + shape[2:], dtype=STORAGE_DTYPE, fill_value=value)
+        tile = np.full(shape=size + shape[2:], fill_value=value, dtype=STORAGE_DTYPE)
         index = tuple(np.array(offset) // TILE_SIZE)
         tiles[index] = tile_constructor.from_data(tile)
     return pmap(tiles)
@@ -169,7 +172,7 @@ def prune_tiles(color_tiles:PMap[IVec2, ColorTile], alpha_tiles:PMap[IVec2, Alph
         if alpha_tile is None or alpha_tile.data.any():
             new_color_tiles[index] = color_tile
             if alpha_tile is None:
-                new_alpha_tiles[index] = FillTile(size=color_tile.data.shape[:2], value=255)
+                new_alpha_tiles[index] = FillTile(size=color_tile.data.shape[:2], value=STORAGE_DTYPE_MAX)
             else:
                 new_alpha_tiles[index] = alpha_tile
     return pmap(new_color_tiles), pmap(new_alpha_tiles)

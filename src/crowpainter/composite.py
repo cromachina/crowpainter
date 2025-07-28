@@ -20,14 +20,6 @@ from .layer_data import *
 def check_lock(arr):
     return arr if isinstance(arr, np.ndarray) and arr.flags.writeable else None
 
-def to_blending_type(arr:np.ndarray | np.number | None):
-    if arr is None:
-        return None
-    if np.issubdtype(np.array(arr).dtype.type, np.integer) or issubclass(type(arr), int):
-        return BLENDING_DTYPE(arr) / 255.0
-    else:
-        return arr
-
 def get_layer_and_clip_groupings(layers:GroupLayer | list [BaseLayer]):
     grouped_layers = []
     clip_stack = []
@@ -68,13 +60,12 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
         elif isinstance(sublayer, PixelLayer):
             pixel_srcs = sublayer.get_pixel_data(color_dst, alpha_dst, offset)
 
-        opacity = to_blending_type(sublayer.opacity)
+        opacity = sublayer.opacity
 
         for (sub_offset, ((sub_color_dst, sub_color_src), (sub_alpha_dst, sub_alpha_src))) in pixel_srcs.items():
-            sub_color_src = to_blending_type(sub_color_src)
-            sub_alpha_src = to_blending_type(sub_alpha_src)
-            mask_src = sublayer.get_mask_data(sub_alpha_dst, sub_offset)
-            mask_src = to_blending_type(mask_src)
+            sub_color_src = util.to_blending_dtype(sub_color_src)
+            sub_alpha_src = util.to_blending_dtype(sub_alpha_src)
+            mask_src = util.to_blending_dtype(sublayer.get_mask_data(sub_alpha_dst, sub_offset))
 
             # A pass-through layer has already been blended, so just lerp instead.
             # NOTE: Clipping layers do not apply to pass layers, as if clipping were simply disabled.

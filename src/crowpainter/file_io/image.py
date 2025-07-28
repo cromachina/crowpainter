@@ -11,13 +11,16 @@ def read(file_path:Path) -> Canvas:
 
     if data.shape[2] == 3:
         color = cv2.cvtColor(data, cv2.COLOR_BGR2RGB)
-        alpha = 255
+        alpha = np.uint8(255)
         bg = BackgroundSettings()
     else:
         data = cv2.cvtColor(data, cv2.COLOR_BGRA2RGBA)
         color, alpha = np.split(data, [3], axis=2)
         bg = BackgroundSettings(transparent=True)
     data = None
+
+    color = util.to_storage_dtype(color)
+    alpha = util.to_storage_dtype(alpha)
 
     color_tiles, alpha_tiles = color_alpha_to_tiles(color, alpha)
 

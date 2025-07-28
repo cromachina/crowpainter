@@ -177,7 +177,7 @@ async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=Non
         color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
         alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
     else:
-        color = np.full(size + (3,), dtype=BLENDING_DTYPE, fill_value=np.array(canvas.background.color) / 255.0)
+        color = np.full(size + (3,), dtype=BLENDING_DTYPE, fill_value=util.to_display_dtype(canvas.background.color))
         alpha = np.ones(size + (1,), dtype=BLENDING_DTYPE)
 
     lock = threading.Lock()
@@ -192,7 +192,7 @@ async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=Non
         composite.composite(canvas.top_level, offset, (tile_color, tile_alpha))
         with lock:
             progress_count += 1
-        progress_callback(progress_count / progress_total)
+            progress_callback(progress_count / progress_total)
 
     tasks = []
     for (tile_size, tile_offset) in tiles:
@@ -202,17 +202,15 @@ async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=Non
     def final():
         nonlocal color, alpha
         blendfuncs.clip_divide(color, alpha, out=color)
-        color *= 255
-        color = color.astype(STORAGE_DTYPE)
-        alpha *= 255
-        alpha = alpha.astype(STORAGE_DTYPE)
+        color = util.to_display_dtype(color)
+        alpha = util.to_display_dtype(alpha)
         return np.dstack((color, alpha))
     return await peval(final)
 
 def make_checkerboard_texture(check_a, check_b, size):
     check_a = util.clamp(0, 255, check_a)
     check_b = util.clamp(0, 255, check_b)
-    arr = np.array([check_a, check_b, check_b, check_a], dtype=STORAGE_DTYPE).reshape((2,2,1))
+    arr = np.array([check_a, check_b, check_b, check_a], dtype=DISPLAY_DTYPE).reshape((2,2,1))
     return cv2.resize(arr, (size, size), interpolation=cv2.INTER_NEAREST).reshape((size, size, 1))
 
 def make_ideal_checkerboard(value, size):
@@ -294,7 +292,8 @@ class Viewport(QGraphicsView):
         if bg.transparent and bg.checker:
             self.canvas_bg_area.setBrush(QBrush(np_to_qimage(make_ideal_checkerboard(bg.checker_brightness, 32))))
         else:
-            self.canvas_bg_area.setBrush(QBrush(QColor(*bg.color, 255)))
+            color = util.to_display_dtype(bg.color)
+            self.canvas_bg_area.setBrush(QBrush(QColor(*color, 255)))
 
     def fit_canvas_in_view(self):
         self.position = QPointF()
@@ -452,7 +451,7 @@ def build_layer_list(layer_list:LayerList, layers:layer_data.GroupLayer):
         item.visible_checkbox.setChecked(layer.visible)
         item.text.layer_name.setText(layer.name)
         item.text.blend_mode.setText(blend_mode_to_str(layer.blend_mode))
-        item.text.opacity.setText(f'{int(layer.opacity / 255 * 100)}%')
+        item.text.opacity.setText(f'{int(layer.opacity * 100)}%')
         layer_list.add_item(item)
         if is_group:
             build_layer_list(item.child_list, layer)

@@ -59,11 +59,11 @@ def _parse_array(data, depth, lut=None):
             parsed = lut[parsed]
         return parsed
     elif depth == 16:
-        return (np.frombuffer(data, ">u2") / 256).astype(np.uint8)
+        return np.frombuffer(data, ">u2")
     elif depth == 32:
-        return (np.frombuffer(data, ">f4") * 256).astype(np.uint8)
+        return np.frombuffer(data, ">f4")
     elif depth == 1:
-        return np.unpackbits(np.frombuffer(data, np.uint8))
+        return np.unpackbits(np.frombuffer(data, np.uint8)) * 255
     else:
         raise ValueError("Unsupported depth: %g" % depth)
 
@@ -97,10 +97,7 @@ def _layer_numpy(layer:psdl.Layer, channel=None):
 
     # Use the psd-tools path if we are not decoding RLE
     if not all([channel.compression == psdc.Compression.RLE for channel in channels]):
-        data = layer.numpy(channel)
-        if data is not None:
-            data = (data * 255.0).astype(np.uint8)
-        return data
+        return util.to_storage_dtype(layer.numpy(channel))
 
     if channel == 'mask':
         width, height = layer.mask.width, layer.mask.height
@@ -109,7 +106,7 @@ def _layer_numpy(layer:psdl.Layer, channel=None):
 
     decoded = []
     for channel in channels:
-        decoded.append(_parse_array(rle.decode_rle(channel.data, width, height, depth, version), depth))
+        decoded.append(util.to_storage_dtype(_parse_array(rle.decode_rle(channel.data, width, height, depth, version), depth)))
 
     return np.stack(decoded, axis=1).reshape((height, width, -1))
 
@@ -118,8 +115,10 @@ def _get_sai_special_mode_opacity(layer:psdl.Layer):
     tsly = blocks.get(psdc.Tag.TRANSPARENCY_SHAPES_LAYER, None)
     iOpa = blocks.get(psdc.Tag.BLEND_FILL_OPACITY, None)
     if tsly and iOpa and tsly.data == 0:
-        return STORAGE_DTYPE(iOpa.data), _from_psd_special.get(layer.blend_mode, BlendMode.NORMAL)
-    return STORAGE_DTYPE(layer.opacity), _from_psd_blendmode.get(layer.blend_mode, BlendMode.NORMAL)
+        opacity, blend_mode = iOpa.data, _from_psd_special.get(layer.blend_mode, BlendMode.NORMAL)
+    else:
+        opacity, blend_mode = layer.opacity, _from_psd_blendmode.get(layer.blend_mode, BlendMode.NORMAL)
+    return util.to_blending_dtype(np.uint8(opacity)), blend_mode
 
 def _get_protection_settings(layer:psdl.Layer):
     blocks = layer.tagged_blocks
@@ -143,7 +142,7 @@ def _get_mask(layer:psdl.Layer):
             position=(layer.mask.top, layer.mask.left),
             alpha=_get_layer_channel(layer, 'mask'),
             visible=not layer.mask.disabled,
-            background_color=layer.mask.background_color,
+            background_color=np.uint8(layer.mask.background_color),
         )
     else:
         return None
@@ -193,7 +192,7 @@ def _build_sublayers(psd_group) -> GroupLayer:
 
 def _is_pure_background(layer:psdl.Layer):
     alpha = _layer_numpy(layer, 'shape')
-    alpha_all_1 = True if alpha is None else (alpha == 255).all()
+    alpha_all_1 = True if alpha is None else (alpha == STORAGE_DTYPE_MAX).all()
     if alpha_all_1:
         color = _layer_numpy(layer, 'color')
         full_color = color[0, 0]

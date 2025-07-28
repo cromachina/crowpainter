@@ -53,18 +53,15 @@ class _SerializeConfig():
     def next_id(self):
         return next(self.id_gen)
 
-def _read_ndarray(array, zip:zipfile.ZipFile):
-    bytes = zip.read(array['data_path'])
-    return np.frombuffer(bytes, dtype=STORAGE_DTYPE).reshape(array['shape'])
+def _read_ndarray(data_path, zip:zipfile.ZipFile):
+    with zip.open(data_path, 'r') as fp:
+        return util.to_storage_dtype(np.load(fp, allow_pickle=False))
 
 def _write_ndarray(array:np.ndarray, config:_SerializeConfig):
     data_path = config.next_id()
-    array_data = {
-        'shape': array.shape,
-        'data_path': data_path
-    }
-    config.zip_file.writestr(data_path, array.tobytes())
-    return array_data
+    with config.zip_file.open(data_path, 'w') as fp:
+        np.save(fp, array, allow_pickle=False)
+    return data_path
 
 def _read_tile_data(tiles, zip:zipfile.ZipFile):
     tile_map_data = {}
@@ -73,7 +70,7 @@ def _read_tile_data(tiles, zip:zipfile.ZipFile):
         if tile_constructor is FillTile:
             tile_args = {}
             tile_args['size'] = tile['size']
-            tile_args['value'] = tile['value']
+            tile_args['value'] = _read_ndarray(tile['value'], zip)
             tile_data = tile_constructor(**tile_args)
         else:
             tile_data = tile_constructor.from_data(_read_ndarray(tile['data'], zip))
@@ -89,7 +86,7 @@ def _write_tile_data(tiles:PMap[IVec2, BaseArrayTile | FillTile], config:_Serial
         }
         if isinstance(tile, FillTile):
             tile_data['size'] = tile.size
-            tile_data['value'] = tile.value
+            tile_data['value'] = _write_ndarray(tile.value, config)
         else:
             tile_data['data'] = _write_ndarray(tile.data, config)
         tile_map_data.append(tile_data)
@@ -103,7 +100,7 @@ def _read_mask(mask, zip:zipfile.ZipFile):
         position=mask['position'],
         alpha=_read_tile_data(mask['alpha'], zip),
         visible=mask['visible'],
-        background_color=mask['background_color'],
+        background_color=_read_ndarray(mask['background_color'], zip),
     )
 
 def _write_mask(mask:Mask | None, config:_SerializeConfig):
@@ -113,7 +110,7 @@ def _write_mask(mask:Mask | None, config:_SerializeConfig):
         'position': mask.position,
         'alpha': _write_tile_data(mask.alpha, config),
         'visible': mask.visible,
-        'background_color': mask.background_color,
+        'background_color': _write_ndarray(mask.background_color, config),
     }
 
 def _read_sublayers(layers, zip:zipfile.ZipFile):
@@ -173,10 +170,12 @@ def _write_sublayers(layers:GroupLayer | list[BaseLayer], config):
 def read(file_path:Path) -> Canvas:
     with zipfile.ZipFile(file_path, 'r') as zip:
         canvas_data = json.loads(zip.read('canvas').decode())
+        background = canvas_data['background']
+        background['color'] = _read_ndarray(background['color'], zip)
         return Canvas(
             size = tuple(canvas_data['size']),
             top_level=_read_sublayers(canvas_data['top_level'], zip),
-            background=BackgroundSettings(**canvas_data['background']),
+            background=BackgroundSettings(**background),
             selection=_read_mask(canvas_data['selection'], zip)
         )
 
@@ -193,7 +192,7 @@ def write(canvas:Canvas, file_path:Path, progress_callback=None):
                 'size': canvas.size,
                 'top_level': _write_sublayers(canvas.top_level, config),
                 'background': {
-                    'color': canvas.background.color,
+                    'color': _write_ndarray(canvas.background.color, config),
                     'transparent': canvas.background.transparent,
                     'checker': canvas.background.checker,
                     'checker_brightness': canvas.background.checker_brightness,

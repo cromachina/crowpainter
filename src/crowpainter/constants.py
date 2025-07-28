@@ -2,8 +2,13 @@ from enum import Enum, auto
 import numpy as np
 
 TILE_SIZE = (256, 256)
-STORAGE_DTYPE = np.uint8
+DISPLAY_DTYPE = np.uint8
+STORAGE_DTYPE = np.uint16
 BLENDING_DTYPE = np.float32
+if np.issubdtype(STORAGE_DTYPE, np.integer):
+    STORAGE_DTYPE_MAX = STORAGE_DTYPE(np.iinfo(STORAGE_DTYPE).max)
+else: # floating
+    STORAGE_DTYPE_MAX = STORAGE_DTYPE(1.0)
 
 class BlendMode(Enum):
     PASS = auto()
