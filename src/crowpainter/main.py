@@ -39,6 +39,7 @@ def timeit(message):
 class ExtendedInfoMessage(QDialog):
     def __init__(self, parent=None, title='', text=''):
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle(title)
         message = QPlainTextEdit()
         message.setPlainText(text)
@@ -220,7 +221,7 @@ def make_ideal_checkerboard(value, size):
 
 class Viewport(QGraphicsView):
     '''Display a canvas and handle input events for it.'''
-    def __init__(self, canvas_state:CanvasState, initial_composite=None, parent=None):
+    def __init__(self, parent=None, canvas_state:CanvasState=None, initial_composite=None):
         super().__init__(parent)
         self.position = QPointF()
         self.zoom = default_zoom_level
@@ -382,11 +383,9 @@ class LayerTextItem(QWidget):
         self.setLayout(layout)
 
 class LayerItem(QWidget):
-    def __init__(self, is_group, parent=None) -> None:
+    def __init__(self, parent=None, is_group=True) -> None:
         super().__init__(parent)
 
-        frame = QFrame()
-        frame.setFrameShape(QFrame.Shape.StyledPanel)
         self.clip_icon = QLabel()
         self.clip_icon.setStyleSheet('background-color: deeppink;')
         self.clip_icon.setMaximumWidth(3)
@@ -399,7 +398,8 @@ class LayerItem(QWidget):
         else:
             self.icon = QLabel()
         self.text = LayerTextItem()
-        layout = QHBoxLayout()
+        frame = QFrame()
+        layout = QHBoxLayout(frame)
         layout.addWidget(self.clip_icon)
         layout.addWidget(self.visible_checkbox)
         layout.addWidget(self.icon)
@@ -407,10 +407,11 @@ class LayerItem(QWidget):
         layout.setSpacing(3)
         layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.setContentsMargins(3,0,3,0)
+        frame.setFrameShape(QFrame.Shape.StyledPanel)
         frame.setLayout(layout)
 
-        self.child_list = LayerList()
-        vbox = QVBoxLayout()
+        self.child_list = LayerList(frame)
+        vbox = QVBoxLayout(self)
         vbox.addWidget(frame)
         vbox.addWidget(self.child_list)
         vbox.setSpacing(0)
@@ -427,15 +428,15 @@ class LayerItem(QWidget):
             self.child_list.hide()
 
 class LayerList(QWidget):
-    def __init__(self, is_group=True, parent=None) -> None:
+    def __init__(self, parent=None, is_group=True) -> None:
         super().__init__(parent)
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         layout.setSpacing(0)
         layout.setContentsMargins(20 if is_group else 0,0,0,0)
         self.setLayout(layout)
 
-    def add_item(self, widget):
+    def addWidget(self, widget):
         self.layout().insertWidget(0, widget)
 
 def blend_mode_to_str(blend_mode:layer_data.BlendMode):
@@ -445,14 +446,14 @@ def build_layer_list(layer_list:LayerList, layers:layer_data.GroupLayer):
     for layer in layers:
         layer:layer_data.BaseLayer
         is_group = isinstance(layer, layer_data.GroupLayer)
-        item = LayerItem(is_group)
+        item = LayerItem(layer_list, is_group)
         item.layer_id = layer.id
         item.clip_icon.setVisible(layer.clip)
         item.visible_checkbox.setChecked(layer.visible)
         item.text.layer_name.setText(layer.name)
         item.text.blend_mode.setText(blend_mode_to_str(layer.blend_mode))
         item.text.opacity.setText(f'{int(layer.opacity * 100)}%')
-        layer_list.add_item(item)
+        layer_list.addWidget(item)
         if is_group:
             build_layer_list(item.child_list, layer)
             item.on_group_icon_clicked(layer.folder_open)
@@ -506,36 +507,33 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('CrowPainter')
         self.setGeometry(0, 0, 1000, 1000)
         self.create_menus()
-        self.canvases = []
-        self.viewports = []
         self.viewport_tab = QTabWidget(self)
         self.viewport_tab.setTabsClosable(True)
         self.viewport_tab.tabCloseRequested.connect(self.on_tab_close_requested)
         self.viewport_tab.currentChanged.connect(self.on_tab_selected)
         self.setCentralWidget(self.viewport_tab)
-        statusbar = StatusBar()
-        self.setStatusBar(statusbar)
+        self.setStatusBar(StatusBar(self))
 
-        self.layer_panel_dock = QDockWidget()
+        self.layer_panel_dock = QDockWidget(self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.layer_panel_dock)
+        self.scroll_area = QScrollArea(self.layer_panel_dock)
+        self.scroll_area.setWidgetResizable(True)
+        self.layer_panel_dock.setWidget(self.scroll_area)
 
     def on_tab_close_requested(self, index):
         widget = self.viewport_tab.widget(index)
-        widget.close()
-        self.viewport_tab.removeTab(index)
+        widget.deleteLater()
 
     def on_tab_selected(self, index):
+        if self.scroll_area.widget() is not None:
+            self.scroll_area.widget().deleteLater()
         if index == -1:
-            self.layer_panel_dock.setWidget(None)
             return
         viewport:Viewport = self.viewport_tab.widget(index)
         canvas_state = viewport.canvas_state.get_current()
-        list = LayerList(is_group=False)
-        build_layer_list(list, canvas_state.top_level)
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setWidget(list)
-        self.layer_panel_dock.setWidget(scroll_area)
+        layer_list = LayerList(self.scroll_area, is_group=False)
+        build_layer_list(layer_list, canvas_state.top_level)
+        self.scroll_area.setWidget(layer_list)
 
     def on_new(self):
         pass
@@ -556,11 +554,12 @@ class MainWindow(QMainWindow):
             self.statusBar().addWidget(prog)
             class SigHolder(QObject):
                 update_progress = Signal(float)
-            sig = SigHolder()
+            sig = SigHolder(prog)
             sig.update_progress.connect(lambda f: prog.setValue(int(f * 100)))
             yield sig.update_progress.emit
         finally:
             self.statusBar().removeWidget(prog)
+            prog.deleteLater()
 
     async def on_save_as(self):
         widget:Viewport = self.viewport_tab.currentWidget()
@@ -626,6 +625,7 @@ class MainWindow(QMainWindow):
         self.action_save = self.create_menu_action(menu_file, '&Save ...', self.on_save)
         self.action_save_as = self.create_menu_action(menu_file, 'Save &As ...', lambda: asyncio.ensure_future(self.on_save_as()))
         self.action_close = self.create_menu_action(menu_file, '&Close ...', self.on_close)
+        self.action_mem_stats = self.create_menu_action(menu_file, '&Print Memory Stats', util.update_memory_tracking)
 
         menu_edit = menu.addMenu('&Edit')
         menu_canvas = menu.addMenu('&Canvas')
@@ -660,6 +660,3 @@ def main():
     sys.excepthook = excepthook
     main_window.show()
     QtAsyncio.run()
-
-if __name__ == "__main__":
-    main()
