@@ -652,6 +652,7 @@ def init_logging():
 def main():
     init_logging()
     app = QApplication(sys.argv)
+    app.setStyle('fusion')
     main_window = MainWindow()
     def excepthook(exc_type, exc_value, exc_tb):
         tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
