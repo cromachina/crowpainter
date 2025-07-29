@@ -21,7 +21,6 @@ import psutil
 from . import layer_data, composite, util, blendfuncs
 from .constants import *
 from .file_io import psd, image, native
-from .qthreadpoolexecutor import QThreadPoolExecutor
 
 worker_count = psutil.cpu_count(False)
 pool = ThreadPoolExecutor(worker_count)
