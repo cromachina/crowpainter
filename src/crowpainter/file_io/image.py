@@ -35,6 +35,16 @@ def read(file_path:Path) -> Canvas:
         background=bg,
     )
 
-# TODO extra params: jpg quality, png compression, etc.
-def write(canvas:Canvas, file_name:Path):
-    raise NotImplementedError()
+def is_grayscale(image):
+    r, g, b = image[:,:,0], image[:,:,1], image[:,:,2]
+    return (r == g).all() and (g == b).all()
+
+def write(image:np.ndarray, file_path:Path, params):
+    if (image[:,:,3] == 255).all():
+        if is_grayscale(image):
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2GRAY)
+        else:
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+    else:
+        image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGRA)
+    cv2.imwrite(str(file_path), image, params)

@@ -498,8 +498,24 @@ class StatusBar(QStatusBar):
         self.system_memory_bar.setValue(stats.system_memory_usage)
         self.disk_bar.setValue(stats.disk_usage)
 
-image_types = ['crow', 'png', 'psd', 'psb', 'tif', 'tiff', 'jpg', 'jpeg', 'jpe', 'webp', 'bmp', 'dib', 'jp2', 'pbm', 'pgm', 'ppm', 'pnm']
-image_format_str = ' '.join([f'*.{ext}' for ext in image_types])
+image_types = [
+    ('Crowpainter', 'crow'),
+    ('PNG', 'png'),
+    ('Photoshop', 'psd', 'psb'),
+    ('JPEG', 'jpg', 'jpeg', 'jpe'),
+    ('WebP', 'webp'),
+]
+
+def make_filter(name, exts):
+    exts = ' '.join(f'*.{ext}' for ext in exts)
+    return f'{name} ({exts}) ({exts})'
+
+all_images_filter = [make_filter('Image Files', [ext for image_type in image_types for ext in image_type[1:]])]
+sub_images_filter = [make_filter(image_type[0], image_type[1:]) for image_type in image_types]
+image_filter = ';;'.join(all_images_filter + sub_images_filter)
+
+class JpgWriterDialog(QDialog):
+    pass
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -539,11 +555,11 @@ class MainWindow(QMainWindow):
     def on_new(self):
         pass
 
-    async def on_open(self):
-        files, _ = QFileDialog.getOpenFileNames(self, filter=f'Images ({image_format_str});;All files (*.*)', dir='.')
+    def on_open(self):
+        files, _ = QFileDialog.getOpenFileNames(self, filter=image_filter, dir='.')
         for file_path in files:
             # TODO check if file is already open and ask to reopen without saving.
-            await self.open(file_path)
+            asyncio.create_task(self.open(file_path))
 
     def on_save(self):
         pass
@@ -562,18 +578,21 @@ class MainWindow(QMainWindow):
             self.statusBar().removeWidget(prog)
             prog.deleteLater()
 
-    async def on_save_as(self):
+    def on_save_as(self):
         widget:Viewport = self.viewport_tab.currentWidget()
         if widget is None:
             return
         else:
-            file_path, _ = QFileDialog.getSaveFileName(self, filter=f'Images ({image_format_str});;All files (*.*)', dir='.')
+            file_path, _ = QFileDialog.getSaveFileName(self, filter=image_filter, dir='.')
             if file_path == '':
                 return
             current_canvas = widget.canvas_state.get_current()
-            with self.progress_bar() as callback, timeit(f'save {file_path}'):
-                result = await peval(lambda: self.save(current_canvas, file_path, callback))
-            widget.canvas_state.set_saved(current_canvas)
+            current_composite = widget.composite_image
+            async def task():
+                with self.progress_bar() as callback, timeit(f'save {file_path}'):
+                    result = await peval(lambda: self.save(current_canvas, current_composite, file_path, callback))
+                widget.canvas_state.set_saved(current_canvas)
+            asyncio.create_task(task())
 
     def on_close(self):
         pass
@@ -599,12 +618,14 @@ class MainWindow(QMainWindow):
             index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
             self.viewport_tab.setCurrentIndex(index)
 
-    def save(self, canvas:layer_data.Canvas, file_path, progress_callback):
+    def save(self, canvas:layer_data.Canvas, composite:np.ndarray, file_path, progress_callback):
         try:
             file_path = Path(file_path)
             file_type = file_path.suffix
             if file_type == '.crow':
                 native.write(canvas, file_path, progress_callback)
+            if file_type in ['.webp', '.png']:
+                image.write(composite, file_path, [])
             return True
         except Exception as ex:
             logging.exception(ex)
@@ -633,9 +654,9 @@ class MainWindow(QMainWindow):
         menu_file = menu.addMenu('&File')
 
         self.action_new = self.create_menu_action(menu_file, '&New ...', self.on_new)
-        self.action_open = self.create_menu_action(menu_file, '&Open ...', lambda: asyncio.ensure_future(self.on_open()))
+        self.action_open = self.create_menu_action(menu_file, '&Open ...', self.on_open)
         self.action_save = self.create_menu_action(menu_file, '&Save ...', self.on_save)
-        self.action_save_as = self.create_menu_action(menu_file, 'Save &As ...', lambda: asyncio.ensure_future(self.on_save_as()))
+        self.action_save_as = self.create_menu_action(menu_file, 'Save &As ...', self.on_save_as)
         self.action_close = self.create_menu_action(menu_file, '&Close ...', self.on_close)
         self.action_mem_stats = self.create_menu_action(menu_file, '&Print Memory Stats', util.update_memory_tracking)
 
