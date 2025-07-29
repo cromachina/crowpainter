@@ -6,6 +6,7 @@ import logging
 import traceback
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import contextlib
 
 import cv2
@@ -23,7 +24,7 @@ from .file_io import psd, image, native
 from .qthreadpoolexecutor import QThreadPoolExecutor
 
 worker_count = psutil.cpu_count(False)
-pool = QThreadPoolExecutor(worker_count)
+pool = ThreadPoolExecutor(worker_count)
 
 def peval(func):
     return QtAsyncio.asyncio.get_running_loop().run_in_executor(pool, func)
