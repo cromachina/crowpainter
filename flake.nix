@@ -43,7 +43,7 @@
           pyPkgs.build
         ];
         shellHook = ''
-          build-cython() python setup.py build_ext --inplace
+          build-cython() { python setup.py build_ext --inplace; }
         '';
       };
     }
