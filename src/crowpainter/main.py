@@ -17,6 +17,7 @@ from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 import PySide6.QtAsyncio as QtAsyncio
 import psutil
+from pyqttoast import Toast, ToastPreset
 
 from . import layer_data, composite, util, blendfuncs
 from .constants import *
@@ -56,8 +57,30 @@ class ExtendedInfoMessage(QDialog):
         self.setLayout(layout)
         self.setModal(True)
 
+def dispatch_to_main_thread(callback):
+    global app
+    timer = QTimer()
+    timer.moveToThread(app.thread())
+    def wrapper():
+        callback()
+        timer.deleteLater()
+    timer.timeout.connect(wrapper)
+    QMetaObject.invokeMethod(timer, 'start', Q_ARG(int, 0))
+
+def error_toast(text):
+    toast = Toast()
+    toast.setDuration(5000)
+    toast.setText(text)
+    toast.applyPreset(ToastPreset.ERROR_DARK)
+    toast.setFadeInDuration(0)
+    toast.setFadeOutDuration(0)
+    toast.show()
+
+def show_error_toast(text):
+    dispatch_to_main_thread(lambda: error_toast(text))
+
 def show_error_message(text):
-    ExtendedInfoMessage(title='Error', text=text).exec()
+    dispatch_to_main_thread(lambda: ExtendedInfoMessage(title='Error', text=text).exec())
 
 class CanvasState():
     def __init__(self, initial_state:layer_data.Canvas, file_path:Path, on_filesystem:bool):
@@ -600,13 +623,8 @@ class MainWindow(QMainWindow):
     async def open(self, file_path):
         file_path = Path(file_path)
         with self.progress_bar() as callback, timeit(f'open {file_path}'):
-            try:
-                with timeit(f'open file read {file_path}'):
-                    canvas = await peval(lambda: open_file(file_path))
-            except Exception as ex:
-                logging.exception(ex)
-                show_error_message(traceback.format_exc())
-                return
+            with timeit(f'open file read {file_path}'):
+                canvas = await peval(lambda: open_file(file_path))
             canvas_state = CanvasState(
                 initial_state=canvas,
                 file_path=file_path,
@@ -619,18 +637,13 @@ class MainWindow(QMainWindow):
             self.viewport_tab.setCurrentIndex(index)
 
     def save(self, canvas:layer_data.Canvas, composite:np.ndarray, file_path, progress_callback):
-        try:
-            file_path = Path(file_path)
-            file_type = file_path.suffix
-            if file_type == '.crow':
-                native.write(canvas, file_path, progress_callback)
-            if file_type in ['.webp', '.png']:
-                image.write(composite, file_path, [])
-            return True
-        except Exception as ex:
-            logging.exception(ex)
-            show_error_message(traceback.format_exc())
-            return False
+        file_path = Path(file_path)
+        file_type = file_path.suffix
+        if file_type == '.crow':
+            native.write(canvas, composite, file_path, progress_callback)
+        if file_type in ['.webp', '.png']:
+            image.write(composite, file_path, [])
+        return True
 
     def create_menu_action(self, menu:QMenu, text:str, callback, enabled=True):
         action = QAction(text=text, parent=self)
@@ -685,14 +698,30 @@ def init_logging():
     )
 
 def main():
+    global app
     init_logging()
     app = QApplication(sys.argv)
     app.setStyle('fusion')
     main_window = MainWindow()
+    # Exceptions that occur in any thread, outside of the async event loop.
     def excepthook(exc_type, exc_value, exc_tb):
         tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        message = "".join(traceback.format_exception_only(exc_type, exc_value))
         logging.exception(tb)
-        ExtendedInfoMessage(title='Error', text=tb).exec()
+        show_error_toast(message)
+    # Exceptions that occur in the async event loop.
+    def async_exception_handler(context):
+        tb = context.get('traceback')
+        message = repr(context.get('exception'))
+        logging.exception(tb)
+        show_error_toast(message)
+    async def async_init():
+        asyncio.get_event_loop().set_exception_handler(async_exception_handler)
+        main_window.show()
+    Toast.setPositionRelativeToWidget(main_window)
     sys.excepthook = excepthook
-    main_window.show()
-    QtAsyncio.run()
+    QtAsyncio.run(async_init())
+
+# Lets this run in the vscode debugger.
+if __name__ == '__main__':
+    main()

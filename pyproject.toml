@@ -15,11 +15,12 @@ requires-python = ">=3.13"
 dependencies = [
     "cython",
     "psutil",
-    "psd_tools",
+    "psd-tools",
     "opencv-python",
     "numpy",
     "pyrsistent",
-    "PySide6"
+    "pyside6",
+    "pyqt-toast-notification"
 ]
 keywords = ["art", "painting", "drawing", "illustration"]
 classifiers = [

@@ -12,7 +12,24 @@
     let
       pkgs = nixpkgs.legacyPackages.${system};
       lib = pkgs.lib;
-      pyPkgs = pkgs.python313Packages;
+      pyPkgs = pkgs.python313Packages // {
+        "pyqt-toast-notification" = pyPkgs.buildPythonPackage {
+          pname = "pyqt-toast-notification";
+          version = "1.3.3";
+          src = pkgs.fetchurl {
+            url = "https://files.pythonhosted.org/packages/84/3a/7614af8234f36a38476ae62599ba666b2bda66a71605323a4dbadcf94776/pyqt_toast_notification-1.3.3-py3-none-any.whl";
+            sha256 = "05adrnqzb5ywy7b6hd0fdrzs2y5mn8m4afmdngq2i9vaacgh3fk5";
+          };
+          format = "wheel";
+          doCheck = false;
+          buildInputs = [];
+          checkInputs = [];
+          nativeBuildInputs = [];
+          propagatedBuildInputs = [
+            pyPkgs.qtpy
+          ];
+        };
+      };
       pyproject = builtins.fromTOML (builtins.readFile ./pyproject.toml);
       project = pyproject.project;
       fixString = x: lib.strings.toLower (builtins.replaceStrings ["_"] ["-"] x);
