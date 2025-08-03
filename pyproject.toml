@@ -20,7 +20,7 @@ dependencies = [
     "numpy",
     "pyrsistent",
     "pyside6",
-    "pyqt-toast-notification"
+    "pyqt-toast-notification",
 ]
 keywords = ["art", "painting", "drawing", "illustration"]
 classifiers = [
@@ -31,11 +31,24 @@ classifiers = [
     "Topic :: Multimedia :: Graphics",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "viztracer",
+]
+
 [project.scripts]
-crowpainter = 'crowpainter.main:main'
+crowpainter = "crowpainter.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 crowpainter = ["*.pyx"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = "src"
+addopts = [
+    "--import-mode=importlib",
+]

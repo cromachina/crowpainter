@@ -29,6 +29,22 @@
             pyPkgs.qtpy
           ];
         };
+        "viztracer" = pyPkgs.buildPythonPackage {
+          pname = "viztracer";
+          version = "1.0.4";
+          src = pkgs.fetchurl {
+            url = "https://files.pythonhosted.org/packages/f8/11/3e42af9884046efd7c4b08f9e84d4c8b13953ba4761e67e39a95239ed02c/viztracer-1.0.4.tar.gz";
+            sha256 = "1mrwx1ynz0f6s75y6adm4dp9c87s9g4s4vv77gci32fnffm6znp8";
+          };
+          format = "setuptools";
+          doCheck = false;
+          buildInputs = [];
+          checkInputs = [];
+          nativeBuildInputs = [];
+          propagatedBuildInputs = [
+            pyPkgs.objprint
+          ];
+        };
       };
       pyproject = builtins.fromTOML (builtins.readFile ./pyproject.toml);
       project = pyproject.project;
@@ -44,9 +60,9 @@
       };
       editablePackage = pyPkgs.mkPythonEditablePackage {
         pname = project.name;
-        version = project.version;
-        scripts = project.scripts;
+        inherit (project) version scripts;
         root = "$PWD/src";
+        dependencies = getPkgs project.optional-dependencies.dev;
       };
     in
     {
@@ -60,7 +76,7 @@
           pyPkgs.build
         ];
         shellHook = ''
-          build-cython() { python setup.py build_ext --inplace; }
+          build-cython() { python setup.py build_ext -j 4 --inplace; }
         '';
       };
     }

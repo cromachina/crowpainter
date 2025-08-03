@@ -13,4 +13,4 @@ extensions = [
     )
 ]
 
-setup(ext_modules=cythonize(extensions, annotate=True))
+setup(ext_modules=cythonize(extensions, nthreads=4, annotate=True))
