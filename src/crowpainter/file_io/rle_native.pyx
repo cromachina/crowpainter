@@ -1,5 +1,4 @@
 #cython: language_level=3, boundscheck=False, wraparound=False
-import sys
 from libc.string cimport memcpy, memset
 from libc.stdint cimport *
 import numpy as np
