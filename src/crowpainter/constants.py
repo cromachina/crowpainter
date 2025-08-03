@@ -3,7 +3,7 @@ import numpy as np
 
 TILE_SIZE = (256, 256)
 DISPLAY_DTYPE = np.uint8
-STORAGE_DTYPE = np.uint16
+STORAGE_DTYPE = np.uint8
 BLENDING_DTYPE = np.float32
 if np.issubdtype(STORAGE_DTYPE, np.integer):
     STORAGE_DTYPE_MAX = STORAGE_DTYPE(np.iinfo(STORAGE_DTYPE).max)
