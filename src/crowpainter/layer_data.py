@@ -28,7 +28,7 @@ class BaseArrayTile(PClass):
 
 class ColorTile(BaseArrayTile):
     def make(size:IVec2, lock=True):
-        return Self.from_data(np.zeros(size + (3,), dtype=STORAGE_DTYPE), lock)
+        return Self.from_data(np.zeros(size + (4,), dtype=STORAGE_DTYPE), lock)
 
 class AlphaTile(BaseArrayTile):
     def make(size:IVec2, lock=True):
@@ -44,8 +44,8 @@ class Mask(SelectableObject):
     visible:bool = field(initial=True)
     background_color:STORAGE_DTYPE = field(initial=STORAGE_DTYPE(0), factory=util.to_storage_dtype)
 
-    def get_mask_data(self, target_alpha_buffer:np.ndarray, target_offset:IVec2):
-        mask = np.full(target_alpha_buffer.shape, self.background_color, dtype=STORAGE_DTYPE)
+    def get_mask_data(self, size:IVec2, target_offset:IVec2):
+        mask = np.full(size + (1,), self.background_color, dtype=STORAGE_DTYPE)
         masks = get_overlap_regions(self.alpha, self.position, mask, target_offset)
         if not masks:
             return None
@@ -68,8 +68,8 @@ class BaseLayer(SelectableObject):
     clip:bool = field(initial=False)
     mask:Mask | None = field(initial=None)
 
-    def get_mask_data(self, target_alpha_buffer:np.ndarray, target_offset:IVec2):
-        return None if self.mask is None else self.mask.get_mask_data(target_alpha_buffer, target_offset)
+    def get_mask_data(self, size:IVec2, target_offset:IVec2):
+        return None if self.mask is None else self.mask.get_mask_data(size, target_offset)
 
     def thaw(self):
         return self.set(mask=self.mask.thaw())
@@ -77,18 +77,9 @@ class BaseLayer(SelectableObject):
 class PixelLayer(BaseLayer):
     position:IVec2 = field(initial=(0, 0))
     color:PMap[IVec2, ColorTile] = field(initial=pmap())
-    alpha:PMap[IVec2, AlphaTile | FillTile] = field(initial=pmap())
 
-    def get_pixel_data(self, target_color_buffer:np.ndarray, target_alpha_buffer:np.ndarray, target_offset:IVec2):
-        color = get_overlap_regions(self.color, self.position, target_color_buffer, target_offset)
-        alpha = get_overlap_regions(self.alpha, self.position, target_alpha_buffer, target_offset)
-        d = {}
-        for k,c in color.items():
-            aa = alpha.get(k)
-            if aa is None:
-                aa = np.ones_like(c)
-            d[k] = (c, aa)
-        return d
+    def get_pixel_data(self, target_color_buffer:np.ndarray, target_offset:IVec2):
+        return get_overlap_regions(self.color, self.position, target_color_buffer, target_offset)
 
     def thaw(self):
         return self.set(color=thaw(self.color), alpha=thaw(self.color))
@@ -144,7 +135,7 @@ def get_overlap_regions(tiles:PMap[IVec2, BaseArrayTile | FillTile], tiles_offse
                 regions[tuple(absolute_offset)] = overlap_tiles
     return regions
 
-def pixel_data_to_tiles(data:np.ndarray | None, tile_constructor):
+def pixel_data_to_tiles(data:np.ndarray | None):
     if data is None:
         return pmap()
     tiles = {}
@@ -153,7 +144,7 @@ def pixel_data_to_tiles(data:np.ndarray | None, tile_constructor):
         tile = np.zeros(shape=size + data.shape[2:], dtype=STORAGE_DTYPE)
         util.blit(tile, data, -offset)
         index = tuple(offset // TILE_SIZE)
-        tiles[index] = tile_constructor.from_data(tile)
+        tiles[index] = ColorTile.from_data(tile)
     return pmap(tiles)
 
 def scalar_to_tiles(value, shape, tile_constructor):
@@ -164,23 +155,11 @@ def scalar_to_tiles(value, shape, tile_constructor):
         tiles[index] = tile_constructor.from_data(tile)
     return pmap(tiles)
 
-def prune_tiles(color_tiles:PMap[IVec2, ColorTile], alpha_tiles:PMap[IVec2, AlphaTile]):
-    new_color_tiles = {}
-    new_alpha_tiles = {}
-    for index,color_tile in color_tiles.items():
-        alpha_tile = alpha_tiles.get(index)
-        if alpha_tile is None or alpha_tile.data.any():
-            new_color_tiles[index] = color_tile
-            if alpha_tile is None:
-                new_alpha_tiles[index] = FillTile(size=color_tile.data.shape[:2], value=STORAGE_DTYPE_MAX)
-            else:
-                new_alpha_tiles[index] = alpha_tile
-    return pmap(new_color_tiles), pmap(new_alpha_tiles)
-
-def color_alpha_to_tiles(color:np.ndarray, alpha:STORAGE_DTYPE | np.ndarray):
-    color_tiles = pixel_data_to_tiles(color, ColorTile)
-    if np.isscalar(alpha):
-        alpha_tiles = scalar_to_tiles(alpha, color.shape[:2] + (1,), AlphaTile)
-    else:
-        alpha_tiles = pixel_data_to_tiles(alpha, AlphaTile)
-    return color_tiles, alpha_tiles
+def prune_tiles(tiles:PMap[IVec2, ColorTile]):
+    new_tiles = {}
+    for index, tile in tiles.items():
+        alpha = util.get_alpha(tile.data)
+        has_alpha = alpha.any()
+        if has_alpha:
+            new_tiles[index] = tile
+    return pmap(new_tiles)

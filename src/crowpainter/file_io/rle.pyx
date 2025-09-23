@@ -5,7 +5,7 @@ from libc.stdint cimport *
 import numpy as np
 
 # A more speed optimized RLE decode based on https://github.com/psd-tools/psd-tools/blob/main/src/psd_tools/compression/
-cdef decode(const uint32_t[:] counts, const uint8_t[:] rows, uint8_t[:,:] result):
+cdef decode_rle(const uint32_t[:] counts, const uint8_t[:] rows, uint8_t[:,:] result):
     cdef uint32_t row_offset = 0, count
     cdef int src, dst, length, header, i, src_next, dst_next
     cdef const uint8_t[:] row_view
@@ -51,7 +51,7 @@ cdef decode(const uint32_t[:] counts, const uint8_t[:] rows, uint8_t[:,:] result
             row_offset += count
     return result
 
-def decode_rle(data, width, height, depth, version):
+def decode(data, width, height, depth, version):
     row_size = max(width * depth // 8, 1)
     dtype = (np.uint16, np.uint32)[version - 1]
     counts = np.frombuffer(data, dtype=dtype, count=height).copy()
@@ -59,5 +59,5 @@ def decode_rle(data, width, height, depth, version):
         counts.byteswap(inplace=True)
     rows = np.frombuffer(data, dtype=np.ubyte, offset=counts.nbytes)
     result = np.empty((height, row_size), dtype=np.ubyte)
-    decode(counts.astype(np.uint32), rows, result)
+    decode_rle(counts.astype(np.uint32), rows, result)
     return result

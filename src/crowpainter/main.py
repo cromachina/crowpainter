@@ -6,7 +6,6 @@ import logging
 import traceback
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor
 import contextlib
 
 import cv2
@@ -22,12 +21,6 @@ from pyqttoast import Toast, ToastPreset
 from . import layer_data, composite, util, blendfuncs
 from .constants import *
 from .file_io import psd, image, native
-
-worker_count = psutil.cpu_count(False)
-pool = ThreadPoolExecutor(worker_count)
-
-def peval(func):
-    return QtAsyncio.asyncio.get_running_loop().run_in_executor(pool, func)
 
 @contextlib.contextmanager
 def timeit(message):
@@ -198,11 +191,11 @@ async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=Non
     if size is None:
         size = canvas.size
     if canvas.background.transparent:
-        color = np.zeros(size + (3,), dtype=BLENDING_DTYPE)
-        alpha = np.zeros(size + (1,), dtype=BLENDING_DTYPE)
+        backdrop = np.zeros(size + (4,), dtype=BLENDING_DTYPE)
     else:
-        color = np.full(size + (3,), dtype=BLENDING_DTYPE, fill_value=util.to_display_dtype(canvas.background.color))
-        alpha = np.ones(size + (1,), dtype=BLENDING_DTYPE)
+        backdrop = np.empty(size + (4,), dtype=BLENDING_DTYPE)
+        util.get_color(backdrop)[:] = util.to_blending_dtype(canvas.background.color)
+        util.get_alpha(backdrop)[:] = 1.0
 
     lock = threading.Lock()
     tiles = list(util.generate_tiles(size, TILE_SIZE))
@@ -211,25 +204,24 @@ async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=Non
 
     def tile_task(size, offset):
         nonlocal progress_count
-        tile_color = util.get_overlap_view(color, size, offset)
-        tile_alpha = util.get_overlap_view(alpha, size, offset)
-        composite.composite(canvas.top_level, offset, (tile_color, tile_alpha))
+        tile = util.get_overlap_view(backdrop, size, offset)
+        composite.composite(canvas.top_level, offset, tile)
         with lock:
             progress_count += 1
             progress_callback(progress_count / progress_total)
 
     tasks = []
     for (tile_size, tile_offset) in tiles:
-        tasks.append(peval(lambda ts=tile_size, to=tile_offset: tile_task(ts, to)))
+        tasks.append(util.peval(tile_task, tile_size, tile_offset))
     await asyncio.gather(*tasks)
 
     def final():
-        nonlocal color, alpha
+        nonlocal backdrop
+        color = util.get_color(backdrop)
+        alpha = util.get_alpha(backdrop)
         blendfuncs.clip_divide(color, alpha, out=color)
-        color = util.to_display_dtype(color)
-        alpha = util.to_display_dtype(alpha)
-        return np.dstack((color, alpha))
-    return await peval(final)
+        return util.to_display_dtype(backdrop)
+    return await util.peval(final)
 
 def make_checkerboard_texture(check_a, check_b, size):
     check_a = util.clamp(0, 255, check_a)
@@ -613,7 +605,7 @@ class MainWindow(QMainWindow):
             current_composite = widget.composite_image
             async def task():
                 with self.progress_bar() as callback, timeit(f'save {file_path}'):
-                    result = await peval(lambda: self.save(current_canvas, current_composite, file_path, callback))
+                    result = await util.peval(self.save, current_canvas, current_composite, file_path, callback)
                 widget.canvas_state.set_saved(current_canvas)
             asyncio.create_task(task())
 
@@ -624,7 +616,7 @@ class MainWindow(QMainWindow):
         file_path = Path(file_path)
         with self.progress_bar() as callback, timeit(f'open {file_path}'):
             with timeit(f'open file read {file_path}'):
-                canvas = await peval(lambda: open_file(file_path))
+                canvas = await open_file(file_path)
             canvas_state = CanvasState(
                 initial_state=canvas,
                 file_path=file_path,
@@ -682,14 +674,14 @@ class MainWindow(QMainWindow):
 
         self.action_show_layer_panel = self.create_menu_widget_toggle_action(menu_window, self.layer_panel_dock, '&Layer Panel')
 
-def open_file(file_path:Path):
+async def open_file(file_path:Path):
     file_type = file_path.suffix
     if file_type in ['.psd', '.psb']:
-        return psd.read(file_path)
+        return await util.peval(psd.read, file_path)
     elif file_type == '.crow':
-        return native.read(file_path)
+        return await util.peval(native.read, file_path)
     else:
-        return image.read(file_path)
+        return await util.peval(image.read, file_path)
 
 def init_logging():
     logging.basicConfig(

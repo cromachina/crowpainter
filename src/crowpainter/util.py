@@ -2,9 +2,19 @@ import psutil
 import weakref
 import gc
 from collections import Counter
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 from pyrsistent import *
+
 from . import constants
+
+worker_count = psutil.cpu_count(False)
+pool = ThreadPoolExecutor(worker_count)
+
+def peval(func, *args, **kwargs):
+    return asyncio.get_running_loop().run_in_executor(pool, lambda: func(*args, **kwargs))
 
 def is_subtype(value, dtype):
     if isinstance(value, np.ndarray):
@@ -109,6 +119,12 @@ def blit(dst, src, offset):
 
 def bit(number, bit):
     return bool(number & (1 << bit))
+
+def get_color(arr:np.ndarray):
+    return arr[:,:,:3]
+
+def get_alpha(arr:np.ndarray):
+    return arr[:,:,3:]
 
 class SystemStats(PRecord):
     own_memory_usage:int = field()

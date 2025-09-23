@@ -40,9 +40,7 @@ def get_layer_and_clip_groupings(layers:GroupLayer | list [BaseLayer]):
     grouped_layers.reverse()
     return grouped_layers
 
-def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[np.ndarray, np.ndarray]):
-    color_dst, alpha_dst = backdrop
-
+def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndarray):
     for sublayer, clip_layers in get_layer_and_clip_groupings(layer):
         if not sublayer.visible:
             continue
@@ -50,22 +48,19 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
 
         if isinstance(sublayer, GroupLayer):
             if blend_mode == BlendMode.PASS:
-                next_backdrop = (color_dst.copy(), alpha_dst.copy())
+                next_backdrop = backdrop.copy()
             else:
-                next_color = np.zeros_like(color_dst)
-                next_alpha = np.zeros_like(alpha_dst)
-                next_backdrop = (next_color, next_alpha)
-            color_src, alpha_src = composite(sublayer, offset, next_backdrop)
-            pixel_srcs = { offset: ((color_dst, color_src), (alpha_dst, alpha_src)) }
+                next_backdrop = np.zeros_like(backdrop)
+            color_src = composite(sublayer, offset, next_backdrop)
+            pixel_srcs = { offset: (backdrop, color_src) }
         elif isinstance(sublayer, PixelLayer):
-            pixel_srcs = sublayer.get_pixel_data(color_dst, alpha_dst, offset)
+            pixel_srcs = sublayer.get_pixel_data(backdrop, offset)
 
         opacity = sublayer.opacity
 
-        for (sub_offset, ((sub_color_dst, sub_color_src), (sub_alpha_dst, sub_alpha_src))) in pixel_srcs.items():
+        for (sub_offset, (sub_color_dst, sub_color_src)) in pixel_srcs.items():
             sub_color_src = util.to_blending_dtype(sub_color_src)
-            sub_alpha_src = util.to_blending_dtype(sub_alpha_src)
-            mask_src = util.to_blending_dtype(sublayer.get_mask_data(sub_alpha_dst, sub_offset))
+            mask_src = util.to_blending_dtype(sublayer.get_mask_data(sub_color_src.shape[:2], sub_offset))
 
             # A pass-through layer has already been blended, so just lerp instead.
             # NOTE: Clipping layers do not apply to pass layers, as if clipping were simply disabled.
@@ -75,44 +70,54 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:tuple[n
                 else:
                     np.multiply(mask_src, opacity, out=mask_src)
                 blendfuncs.lerp(sub_color_dst, sub_color_src, mask_src, out=sub_color_dst)
-                blendfuncs.lerp(sub_alpha_dst, sub_alpha_src, mask_src, out=sub_alpha_dst)
             else:
+                color_src = util.get_color(sub_color_src)
+                alpha_src = util.get_alpha(sub_color_src)
+
                 if isinstance(sublayer, GroupLayer):
                     # Un-multiply group composites so that we can multiply group opacity correctly
-                    sub_color_src = blendfuncs.clip_divide(sub_color_src, sub_alpha_src, out=check_lock(sub_color_src))
+                    color_src = blendfuncs.clip_divide(color_src, alpha_src, out=check_lock(color_src))
 
                 if len(clip_layers) != 0:
                     # Composite the clip layers now. This basically overwrites just the color by blending onto it without
                     # alpha blending it first.
-                    corrected_alpha = sub_alpha_src ** 0.0001
-                    sub_color_src, _ = composite(clip_layers, sub_offset, (sub_color_src.copy(), corrected_alpha))
+                    color_src_copy = sub_color_src.copy()
+                    alpha_src_copy = util.get_alpha(color_src_copy)
+                    alpha_src_copy **= 0.0001
+                    sub_color_src = composite(clip_layers, sub_offset, color_src_copy)
+
+                color_src = util.get_color(sub_color_src)
+                alpha_src = util.get_alpha(sub_color_src)
 
                 # Apply opacity (fill) before blending otherwise premultiplied blending of special modes will not work correctly.
-                sub_alpha_src = np.multiply(sub_alpha_src, opacity, out=check_lock(sub_alpha_src))
+                alpha_src = np.multiply(alpha_src, opacity, out=check_lock(alpha_src))
 
                 # Now we can 'premultiply' the color_src for the main blend operation.
-                sub_color_src = np.multiply(sub_color_src, sub_alpha_src, out=check_lock(sub_color_src))
+                color_src = np.multiply(color_src, alpha_src, out=check_lock(color_src))
+
+                color_dst = util.get_color(sub_color_dst)
+                alpha_dst = util.get_alpha(sub_color_dst)
 
                 # Run the blend operation.
                 blend_func = blendfuncs.get_blend_func(blend_mode)
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    sub_color_src = blend_func(sub_color_dst, sub_color_src, sub_alpha_dst, sub_alpha_src, out=check_lock(sub_color_src))
+                    color_src = blend_func(color_dst, color_src, alpha_dst, alpha_src, out=check_lock(color_src))
 
                 # Premultiplied blending may cause out-of-range values, so it must be clipped.
                 if blend_mode != BlendMode.NORMAL:
-                    sub_color_src = blendfuncs.clip(sub_color_src, out=check_lock(sub_color_src))
+                    color_src = blendfuncs.clip(color_src, out=check_lock(color_src))
 
                 # We apply the mask last and LERP the blended result onto the destination.
                 # Why? Because this is how Photoshop and SAI do it. Applying the mask before blending
                 # will yield a slightly different result from those programs.
                 if mask_src is not None:
-                    blendfuncs.lerp(sub_color_dst, sub_color_src, mask_src, out=sub_color_dst)
+                    blendfuncs.lerp(color_dst, color_src, mask_src, out=color_dst)
                 else:
-                    np.copyto(sub_color_dst, sub_color_src)
+                    np.copyto(color_dst, color_src)
 
                 # Finally we can intersect the mask with the alpha_src and blend the alpha_dst together.
                 if mask_src is not None:
-                    sub_alpha_src = np.multiply(sub_alpha_src, mask_src, out=check_lock(sub_alpha_src))
-                blendfuncs.normal_alpha(sub_alpha_dst, sub_alpha_src, out=sub_alpha_dst)
+                    alpha_src = np.multiply(alpha_src, mask_src, out=check_lock(alpha_src))
+                blendfuncs.normal_alpha(alpha_dst, alpha_src, out=alpha_dst)
 
-    return color_dst, alpha_dst
+    return backdrop
