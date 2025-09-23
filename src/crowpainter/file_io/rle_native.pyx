@@ -11,11 +11,8 @@ cdef size_t decode_rle(uint8_t[:] dst, const uint8_t[:] src, size_t dst_length, 
     while dst_i < dst_length and src_i < src_length:
         length = src[src_i]
         src_i += 1
-        # No-op
-        if length == 128:
-            pass
         # RAW
-        elif length < 128:
+        if length < 128:
             length += 1
             if dst_i + length > dst_length or src_i + length > src_length:
                 return 0
@@ -23,7 +20,7 @@ cdef size_t decode_rle(uint8_t[:] dst, const uint8_t[:] src, size_t dst_length, 
             dst_i += length
             src_i += length
         # RLE
-        else:
+        elif length > 128:
             length = (length ^ 0xff) + 2
             if dst_i + length > dst_length or src_i > src_length:
                 return 0

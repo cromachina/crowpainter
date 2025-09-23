@@ -78,32 +78,36 @@ def _to_rle(array:np.ndarray) -> (list[str], list[np.ndarray]):
 
 def _read_ndarray(array_info, zfile:zipfile.ZipFile):
     path = array_info['path']
-    tags = array_info['tags']
+    data = array_info['data']
     shape = array_info['shape']
     with zfile.open(path, 'r') as fp:
         if len(shape) <= 1:
-            return np.load(fp, allow_pickle=False)
+            return np.frombuffer(fp.read(), dtype=STORAGE_DTYPE)
         array = np.empty(shape, dtype=STORAGE_DTYPE)
-        for tag, channel in zip(tags, range(array.shape[2])):
-            encoded = np.load(fp, allow_pickle=False)
+        for data, channel in zip(data, range(array.shape[2])):
+            tag = data['tag']
+            encoded = np.frombuffer(fp.read(data['size']), dtype=STORAGE_DTYPE)
             if tag == 'RAW':
-                array[:,:,channel] = encoded[:]
+                array[:,:,channel] = encoded.reshape(shape[:2])[:]
             else:
                 dims = (array.shape[0] * array.shape[1],)
                 decode(array[:,:,channel].reshape(dims), encoded)
         return array
 
 def _write_ndarray(array:np.ndarray, config:_SerializeConfig):
-    tags = []
+    data = []
     path = str(Path('data') / config.next_id())
     rle_result = _to_rle(array)
     with config.zip_file.open(path, 'w') as fp:
         for tag, subarray in rle_result:
-            tags.append(tag)
-            np.save(fp, subarray, allow_pickle=False)
+            data.append({
+                'tag': tag,
+                'size': subarray.nbytes,
+            })
+            fp.write(subarray.tobytes())
     return {
         'path': path,
-        'tags': tags,
+        'data': data,
         'shape': array.shape,
     }
 
