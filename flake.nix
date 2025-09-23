@@ -17,10 +17,10 @@
           pname = "pyqt-toast-notification";
           version = "1.3.3";
           src = pkgs.fetchurl {
-            url = "https://files.pythonhosted.org/packages/84/3a/7614af8234f36a38476ae62599ba666b2bda66a71605323a4dbadcf94776/pyqt_toast_notification-1.3.3-py3-none-any.whl";
-            sha256 = "05adrnqzb5ywy7b6hd0fdrzs2y5mn8m4afmdngq2i9vaacgh3fk5";
+            url = "https://files.pythonhosted.org/packages/96/31/2953091ccc0432c6b238f01031f845f35ffe65e0f0dbb77ceda5a31978dc/pyqt-toast-notification-1.3.3.tar.gz";
+            sha256 = "595dbf4b9edee77329e2514255d9a9415ff5d70708c50790db0fee207d323a29";
           };
-          format = "wheel";
+          format = "setuptools";
           doCheck = false;
           buildInputs = [];
           checkInputs = [];
@@ -56,7 +56,9 @@
         format = "pyproject";
         src = ./.;
         build-system = getPkgs pyproject.build-system.requires;
-        dependencies = getPkgs project.dependencies ++ [ pkgs.ffmpeg-full ];
+        dependencies = (getPkgs project.dependencies) ++ (with pkgs; [
+          ffmpeg-full
+        ]);
       };
       editablePackage = pyPkgs.mkPythonEditablePackage {
         pname = project.name;
