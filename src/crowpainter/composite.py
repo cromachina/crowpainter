@@ -59,8 +59,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndar
         opacity = sublayer.opacity
 
         for (sub_offset, (sub_color_dst, sub_color_src)) in pixel_srcs.items():
-            sub_color_src = util.to_blending_dtype(sub_color_src)
-            mask_src = util.to_blending_dtype(sublayer.get_mask_data(sub_color_src.shape[:2], sub_offset))
+            mask_src = sublayer.get_mask_data(sub_color_src.shape[:2], sub_offset)
 
             # A pass-through layer has already been blended, so just lerp instead.
             # NOTE: Clipping layers do not apply to pass layers, as if clipping were simply disabled.
@@ -68,7 +67,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndar
                 if mask_src is None:
                     mask_src = opacity
                 else:
-                    np.multiply(mask_src, opacity, out=mask_src)
+                    blendfuncs.mul(mask_src, opacity, out=mask_src)
                 blendfuncs.lerp(sub_color_dst, sub_color_src, mask_src, out=sub_color_dst)
             else:
                 color_src = util.get_color(sub_color_src)
@@ -83,20 +82,19 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndar
                     # alpha blending it first.
                     color_src_copy = sub_color_src.copy()
                     alpha_src_copy = util.get_alpha(color_src_copy)
-                    alpha_src_copy **= 0.0001
+                    blendfuncs.threshold(alpha_src_copy, out=alpha_src_copy)
                     sub_color_src = composite(clip_layers, sub_offset, color_src_copy)
-
-                color_src = util.get_color(sub_color_src)
-                alpha_src = util.get_alpha(sub_color_src)
-
-                # Apply opacity (fill) before blending otherwise premultiplied blending of special modes will not work correctly.
-                alpha_src = np.multiply(alpha_src, opacity, out=check_lock(alpha_src))
-
-                # Now we can 'premultiply' the color_src for the main blend operation.
-                color_src = np.multiply(color_src, alpha_src, out=check_lock(color_src))
+                    color_src = util.get_color(sub_color_src)
+                    alpha_src = util.get_alpha(sub_color_src)
 
                 color_dst = util.get_color(sub_color_dst)
                 alpha_dst = util.get_alpha(sub_color_dst)
+
+                # Apply opacity (fill) before blending otherwise premultiplied blending of special modes will not work correctly.
+                alpha_src = blendfuncs.mul(alpha_src, opacity, out=check_lock(alpha_src))
+
+                # Now we can 'premultiply' the color_src for the main blend operation.
+                color_src = blendfuncs.mul(color_src, alpha_src, out=check_lock(color_src))
 
                 # Run the blend operation.
                 blend_func = blendfuncs.get_blend_func(blend_mode)
@@ -117,7 +115,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndar
 
                 # Finally we can intersect the mask with the alpha_src and blend the alpha_dst together.
                 if mask_src is not None:
-                    alpha_src = np.multiply(alpha_src, mask_src, out=check_lock(alpha_src))
+                    alpha_src = blendfuncs.mul(alpha_src, mask_src, out=check_lock(alpha_src))
                 blendfuncs.normal_alpha(alpha_dst, alpha_src, out=alpha_dst)
 
     return backdrop

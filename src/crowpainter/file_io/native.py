@@ -8,6 +8,7 @@ import numpy as np
 
 from ..layer_data import *
 from . import rle_native
+from .. import blendfuncs
 
 # Similar in concept to OpenRaster, except JSON for the index and tiles as raw byte arrays.
 VERSION = 0
@@ -82,11 +83,11 @@ def _read_ndarray(array_info, zfile:zipfile.ZipFile):
     shape = array_info['shape']
     with zfile.open(path, 'r') as fp:
         if len(shape) <= 1:
-            return np.frombuffer(fp.read(), dtype=STORAGE_DTYPE)
-        array = np.empty(shape, dtype=STORAGE_DTYPE)
+            return np.frombuffer(fp.read(), dtype=blendfuncs.dtype)
+        array = np.empty(shape, dtype=blendfuncs.dtype)
         for data, channel in zip(data, range(array.shape[2])):
             tag = data['tag']
-            encoded = np.frombuffer(fp.read(data['size']), dtype=STORAGE_DTYPE)
+            encoded = np.frombuffer(fp.read(data['size']), dtype=blendfuncs.dtype)
             if tag == 'RAW':
                 array[:,:,channel] = encoded.reshape(shape[:2])[:]
             else:
@@ -272,7 +273,7 @@ def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_ca
                     'checker_brightness': canvas.background.checker_brightness,
                 },
                 'selection': _write_mask(canvas.selection, config),
-                #'composite': _write_ndarray(composite_image, config)
+                'composite': _write_ndarray(composite_image, config)
             }
             config.zip_file.writestr('canvas.json', json.dumps(canvas_data, default=_serialize_numpy_number))
             config.zip_file.close()

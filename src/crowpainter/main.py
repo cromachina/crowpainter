@@ -191,11 +191,11 @@ async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=Non
     if size is None:
         size = canvas.size
     if canvas.background.transparent:
-        backdrop = np.zeros(size + (4,), dtype=BLENDING_DTYPE)
+        backdrop = np.zeros(size + (4,), dtype=blendfuncs.dtype)
     else:
-        backdrop = np.empty(size + (4,), dtype=BLENDING_DTYPE)
-        util.get_color(backdrop)[:] = util.to_blending_dtype(canvas.background.color)
-        util.get_alpha(backdrop)[:] = 1.0
+        backdrop = np.empty(size + (4,), dtype=blendfuncs.dtype)
+        util.get_color(backdrop)[:] = blendfuncs.from_bytes(np.uint8(canvas.background.color))
+        util.get_alpha(backdrop)[:] = blendfuncs.get_max()
 
     lock = threading.Lock()
     tiles = list(util.generate_tiles(size, TILE_SIZE))
@@ -220,13 +220,13 @@ async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=Non
         color = util.get_color(backdrop)
         alpha = util.get_alpha(backdrop)
         blendfuncs.clip_divide(color, alpha, out=color)
-        return util.to_display_dtype(backdrop)
+        return blendfuncs.to_bytes(backdrop)
     return await util.peval(final)
 
 def make_checkerboard_texture(check_a, check_b, size):
     check_a = util.clamp(0, 255, check_a)
     check_b = util.clamp(0, 255, check_b)
-    arr = np.array([check_a, check_b, check_b, check_a], dtype=DISPLAY_DTYPE).reshape((2,2,1))
+    arr = np.array([check_a, check_b, check_b, check_a], dtype=np.uint8).reshape((2,2,1))
     return cv2.resize(arr, (size, size), interpolation=cv2.INTER_NEAREST).reshape((size, size, 1))
 
 def make_ideal_checkerboard(value, size):
@@ -308,7 +308,7 @@ class Viewport(QGraphicsView):
         if bg.transparent and bg.checker:
             self.canvas_bg_area.setBrush(QBrush(np_to_qimage(make_ideal_checkerboard(bg.checker_brightness, 32))))
         else:
-            color = util.to_display_dtype(bg.color)
+            color = blendfuncs.to_bytes(bg.color)
             self.canvas_bg_area.setBrush(QBrush(QColor(*color, 255)))
 
     def fit_canvas_in_view(self):
@@ -467,7 +467,7 @@ def build_layer_list(layer_list:LayerList, layers:layer_data.GroupLayer):
         item.visible_checkbox.setChecked(layer.visible)
         item.text.layer_name.setText(layer.name)
         item.text.blend_mode.setText(blend_mode_to_str(layer.blend_mode))
-        item.text.opacity.setText(f'{int(layer.opacity * 100)}%')
+        item.text.opacity.setText(f'{int(float(layer.opacity) / blendfuncs.get_max() * 100)}%')
         layer_list.addWidget(item)
         if is_group:
             build_layer_list(item.child_list, layer)
@@ -627,6 +627,7 @@ class MainWindow(QMainWindow):
             viewport = Viewport(canvas_state=canvas_state, initial_composite=composite_image)
             index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
             self.viewport_tab.setCurrentIndex(index)
+        #util.update_memory_tracking()
 
     def save(self, canvas:layer_data.Canvas, composite:np.ndarray, file_path, progress_callback):
         file_path = Path(file_path)

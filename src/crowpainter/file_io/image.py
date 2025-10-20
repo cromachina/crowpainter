@@ -3,6 +3,7 @@ from pathlib import Path
 import cv2
 
 from ..layer_data import *
+from .. import blendfuncs
 
 def read(file_path:Path) -> Canvas:
     data = cv2.imread(str(file_path), cv2.IMREAD_UNCHANGED)
@@ -14,7 +15,7 @@ def read(file_path:Path) -> Canvas:
     else:
         data = cv2.cvtColor(data, cv2.COLOR_BGRA2RGBA)
         bg = BackgroundSettings(transparent=True)
-    data = util.to_storage_dtype(data)
+    data = blendfuncs.from_bytes(data)
     tiles = pixel_data_to_tiles(data)
     layer = PixelLayer(
         name="Layer1",

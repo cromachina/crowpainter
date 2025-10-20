@@ -8,59 +8,11 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from pyrsistent import *
 
-from . import constants
-
 worker_count = psutil.cpu_count(False)
 pool = ThreadPoolExecutor(worker_count)
 
 def peval(func, *args, **kwargs):
     return asyncio.get_running_loop().run_in_executor(pool, lambda: func(*args, **kwargs))
-
-def is_subtype(value, dtype):
-    if isinstance(value, np.ndarray):
-        return np.issubdtype(value.dtype, dtype)
-    if np.isscalar(value):
-        return np.issubdtype(np.array(value).dtype, dtype)
-    if isinstance(value, type):
-        return np.issubdtype(value, dtype)
-    return False
-
-def is_integer(value):
-    return is_subtype(value, np.integer)
-
-def is_floating(value):
-    return is_subtype(value, np.floating)
-
-# Convert to dtype with normalizing
-def convert(value, dtype):
-    if value is None:
-        return None
-    value_dtype = np.array(value).dtype
-    if value_dtype == dtype:
-        return value
-    if is_integer(value) and is_integer(dtype):
-        a = np.iinfo(value_dtype).max
-        b = np.iinfo(dtype).max
-        if b > a:
-            return dtype(value) * dtype(b // a)
-        else:
-            return dtype(value // (a // b))
-    if is_floating(value) and is_integer(dtype):
-        return dtype(value * np.iinfo(dtype).max)
-    if is_integer(value) and is_floating(dtype):
-        return dtype(value) / np.iinfo(value_dtype).max
-    if is_floating(value) and is_floating(dtype):
-        return dtype(value)
-    raise ValueError(f'Type conversion not implemented from {value_dtype} to {dtype}')
-
-def to_display_dtype(x):
-    return convert(x, constants.DISPLAY_DTYPE)
-
-def to_storage_dtype(x):
-    return convert(x, constants.STORAGE_DTYPE)
-
-def to_blending_dtype(x):
-    return convert(x, constants.BLENDING_DTYPE)
 
 def generate_tiles(size, tile_size):
     height, width = size
