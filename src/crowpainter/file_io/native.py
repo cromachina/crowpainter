@@ -3,6 +3,7 @@ from pathlib import Path
 import zipfile
 import tempfile
 import itertools
+import sys
 
 import numpy as np
 
@@ -67,6 +68,7 @@ def _to_rle(array:np.ndarray) -> (list[str], list[np.ndarray]):
         return [('RAW', array)]
     dims = (array.shape[0] * array.shape[1],)
     data = []
+    array = blendfuncs.to_bytes(array)
     for channel in range(array.shape[2]):
         dst = np.empty_like(array, shape=dims)
         src = array[:,:,channel]
@@ -84,16 +86,16 @@ def _read_ndarray(array_info, zfile:zipfile.ZipFile):
     with zfile.open(path, 'r') as fp:
         if len(shape) <= 1:
             return np.frombuffer(fp.read(), dtype=blendfuncs.dtype)
-        array = np.empty(shape, dtype=blendfuncs.dtype)
+        array = np.empty(shape, dtype=np.uint8)
         for data, channel in zip(data, range(array.shape[2])):
             tag = data['tag']
-            encoded = np.frombuffer(fp.read(data['size']), dtype=blendfuncs.dtype)
+            encoded = np.frombuffer(fp.read(data['size']), dtype=np.uint8)
             if tag == 'RAW':
                 array[:,:,channel] = encoded.reshape(shape[:2])[:]
             else:
                 dims = (array.shape[0] * array.shape[1],)
                 decode(array[:,:,channel].reshape(dims), encoded)
-        return array
+        return blendfuncs.from_bytes(array)
 
 def _write_ndarray(array:np.ndarray, config:_SerializeConfig):
     data = []
