@@ -77,13 +77,14 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndar
                     # Un-multiply group composites so that we can multiply group opacity correctly
                     color_src = blendfuncs.clip_divide(color_src, alpha_src, out=check_lock(color_src))
 
-                if len(clip_layers) != 0:
+                if clip_layers:
                     # Composite the clip layers now. This basically overwrites just the color by blending onto it without
                     # alpha blending it first.
                     color_src_copy = sub_color_src.copy()
                     alpha_src_copy = util.get_alpha(color_src_copy)
                     blendfuncs.threshold(alpha_src_copy, out=alpha_src_copy)
                     sub_color_src = composite(clip_layers, sub_offset, color_src_copy)
+                    np.copyto(util.get_alpha(sub_color_src), alpha_src)
                     color_src = util.get_color(sub_color_src)
                     alpha_src = util.get_alpha(sub_color_src)
 
