@@ -663,7 +663,7 @@ class MainWindow(QMainWindow):
         if file_path == '':
             return
         current_canvas = viewport.canvas_state.get_current()
-        current_composite = viewport.composite_image
+        current_composite = viewport.composite_image.copy()
         self.settings.setValue('lastdir', str(Path(file_path).parent))
         if modal:
             progress = self.progress_dialog(f'Saving {current_canvas.name}')
@@ -690,15 +690,14 @@ class MainWindow(QMainWindow):
                     with timeit(f'open file read {file_path}'):
                         current_task = asyncio.create_task(open_file(file_path))
                         canvas = await current_task
-                    do_composite = True
+                    composite_image = None
                     if isinstance(canvas, tuple):
-                        do_composite = False
                         canvas, composite_image = canvas
                     canvas_state = CanvasState(
                         initial_state=canvas,
                         file_path=file_path,
                     )
-                    if do_composite:
+                    if composite_image is None:
                         with timeit(f'open composite {file_path}'):
                             current_task = asyncio.create_task(parallel_composite(canvas, progress_callback=progress.update_value))
                             composite_image = await current_task

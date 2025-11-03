@@ -63,12 +63,13 @@ class _SerializeConfig():
     def next_id(self):
         return next(self.id_gen)
 
-def _to_rle(array:np.ndarray) -> (list[str], list[np.ndarray]):
+def _to_rle(array:np.ndarray, is_bytes=False) -> tuple[list[str], list[np.ndarray]]:
     if np.isscalar(array) or len(array.shape) <= 1:
         return [('RAW', array)]
     dims = (array.shape[0] * array.shape[1],)
     data = []
-    array = blendfuncs.to_bytes(array)
+    if not is_bytes:
+        array = blendfuncs.to_bytes(array)
     for channel in range(array.shape[2]):
         dst = np.empty_like(array, shape=dims)
         src = array[:,:,channel]
@@ -79,13 +80,13 @@ def _to_rle(array:np.ndarray) -> (list[str], list[np.ndarray]):
             data.append(('RLE', dst[:size]))
     return data
 
-def _read_ndarray(array_info, zfile:zipfile.ZipFile):
+def _read_ndarray(array_info, zfile:zipfile.ZipFile, is_bytes=False):
     path = array_info['path']
     data = array_info['data']
     shape = array_info['shape']
     with zfile.open(path, 'r') as fp:
         if len(shape) <= 1:
-            return np.frombuffer(fp.read(), dtype=blendfuncs.dtype)
+            return np.frombuffer(fp.read(), dtype=np.uint8 if is_bytes else blendfuncs.dtype)
         array = np.empty(shape, dtype=np.uint8)
         for data, channel in zip(data, range(array.shape[2])):
             tag = data['tag']
@@ -95,12 +96,15 @@ def _read_ndarray(array_info, zfile:zipfile.ZipFile):
             else:
                 dims = (array.shape[0] * array.shape[1],)
                 decode(array[:,:,channel].reshape(dims), encoded)
-        return blendfuncs.from_bytes(array)
+        if is_bytes:
+            return array
+        else:
+            return blendfuncs.from_bytes(array)
 
-def _write_ndarray(array:np.ndarray, config:_SerializeConfig):
+def _write_ndarray(array:np.ndarray, config:_SerializeConfig, is_bytes=False):
     data = []
     path = str(Path('data') / config.next_id())
-    rle_result = _to_rle(array)
+    rle_result = _to_rle(array, is_bytes=is_bytes)
     with config.zip_file.open(path, 'w') as fp:
         for tag, subarray in rle_result:
             data.append({
@@ -224,13 +228,13 @@ def read(file_path:Path) -> Canvas:
         canvas_data = json.loads(zfile.read('canvas.json').decode())
         background = canvas_data['background']
         background['color'] = _read_ndarray(background['color'], zfile)
-        composite = util.pool.submit(lambda: _read_ndarray(canvas_data['composite'], zfile))
+        composite = util.pool.submit(lambda: _read_ndarray(canvas_data['composite'], zfile, is_bytes=True))
         return reify_canvas_futures(Canvas(
             size=tuple(canvas_data['size']),
             top_level=_read_sublayers(canvas_data['top_level'], zfile),
             background=BackgroundSettings(**background),
             selection=_read_mask(canvas_data['selection'], zfile)
-        ))
+        )), composite.result()
 
 def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_callback=None):
     with (tempfile.NamedTemporaryFile(dir=file_path.parent, prefix=file_path.name, delete=False, delete_on_close=False) as temp,
@@ -252,7 +256,7 @@ def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_ca
                     'checker_brightness': canvas.background.checker_brightness,
                 },
                 'selection': _write_mask(canvas.selection, config),
-                'composite': _write_ndarray(composite_image, config)
+                'composite': _write_ndarray(composite_image, config, is_bytes=True)
             }
             config.zip_file.writestr('canvas.json', json.dumps(canvas_data, default=_serialize_numpy_number))
             config.zip_file.close()
