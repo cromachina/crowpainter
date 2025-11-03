@@ -51,12 +51,13 @@ class ExtendedInfoMessage(QDialog):
         self.setModal(True)
 
 def dispatch_to_main_thread(callback):
-    global app
     timer = QTimer()
-    timer.moveToThread(app.thread())
+    timer.moveToThread(QApplication.instance().thread())
     def wrapper():
-        callback()
-        timer.deleteLater()
+        try:
+            callback()
+        finally:
+            timer.deleteLater()
     timer.timeout.connect(wrapper)
     QMetaObject.invokeMethod(timer, 'start', Q_ARG(int, 0))
 
@@ -690,30 +691,34 @@ def init_logging():
         level=logging.INFO
     )
 
-def main():
-    global app
+# Exceptions that occur in any thread, outside of the async event loop.
+def excepthook(exc_type, exc_value, exc_tb):
+    tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    message = "".join(traceback.format_exception_only(exc_type, exc_value))
+    logging.exception(tb)
+    show_error_toast(message)
+
+# Exceptions that occur in the async event loop.
+def async_exception_handler(context):
+    tb = context.get('traceback')
+    message = repr(context.get('exception'))
+    logging.exception(tb)
+    show_error_toast(message)
+
+async def async_main():
     init_logging()
-    app = QApplication(sys.argv)
-    app.setStyle('fusion')
+    asyncio.get_event_loop().set_exception_handler(async_exception_handler)
     main_window = MainWindow()
-    # Exceptions that occur in any thread, outside of the async event loop.
-    def excepthook(exc_type, exc_value, exc_tb):
-        tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-        message = "".join(traceback.format_exception_only(exc_type, exc_value))
-        logging.exception(tb)
-        show_error_toast(message)
-    # Exceptions that occur in the async event loop.
-    def async_exception_handler(context):
-        tb = context.get('traceback')
-        message = repr(context.get('exception'))
-        logging.exception(tb)
-        show_error_toast(message)
-    async def async_init():
-        asyncio.get_event_loop().set_exception_handler(async_exception_handler)
-        main_window.show()
+    main_window.show()
     Toast.setPositionRelativeToWidget(main_window)
     sys.excepthook = excepthook
-    QtAsyncio.run(async_init())
+
+def main():
+    app = QApplication(sys.argv)
+    app.setOrganizationName('crowpainter')
+    app.setApplicationName('crowpainter')
+    app.setStyle('fusion')
+    QtAsyncio.run(async_main())
 
 # Lets this run in the vscode debugger.
 if __name__ == '__main__':
