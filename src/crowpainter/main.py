@@ -524,7 +524,7 @@ image_types = [
 
 def make_filter(name, exts):
     exts = ' '.join(f'*.{ext}' for ext in exts)
-    return f'{name} ({exts}) ({exts})'
+    return f'{name} ({exts})'
 
 all_images_filter = [make_filter('Image Files', [ext for image_type in image_types for ext in image_type[1:]])]
 sub_images_filter = [make_filter(image_type[0], image_type[1:]) for image_type in image_types]
@@ -568,7 +568,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings = QSettings()
-        self.setWindowTitle('CrowPainter')
+        self.setWindowTitle('Crowpainter')
         self.setGeometry(self.settings.value('window/geometry', type=QRect, defaultValue=QRect(0, 0, 1000, 1000)))
 
         self.viewport_tab = QTabWidget(self)
