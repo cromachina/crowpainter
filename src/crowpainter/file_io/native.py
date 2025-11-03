@@ -114,19 +114,22 @@ def _write_ndarray(array:np.ndarray, config:_SerializeConfig):
         'shape': array.shape,
     }
 
-def _read_tile_data(tile_info_list, tile_data):
-    tile_map_data = {}
-    for tile_info in tile_info_list:
-        tile_constructor = _tile_types[tile_info['type']]
-        if tile_constructor is FillTile:
-            tile_args = {}
-            tile_args['size'] = tile_info['size']
-            tile_args['value'] = tile_data[tile_info['data']['path']]
-            tile = tile_constructor(**tile_args)
-        else:
-            tile = tile_constructor.from_data(tile_data[tile_info['data']['path']])
-        tile_map_data[tuple(tile_info['index'])] = tile
-    return pmap(tile_map_data)
+def _read_tile_data(tile_info_list, zfile:zipfile.ZipFile):
+    def task():
+        tile_map_data = {}
+        for tile_info in tile_info_list:
+            data = _read_ndarray(tile_info['data'], zfile)
+            tile_constructor = _tile_types[tile_info['type']]
+            if tile_constructor is FillTile:
+                tile_args = {}
+                tile_args['size'] = tile_info['size']
+                tile_args['value'] = data
+                tile = tile_constructor(**tile_args)
+            else:
+                tile = tile_constructor.from_data(data)
+            tile_map_data[tuple(tile_info['index'])] = tile
+        return pmap(tile_map_data)
+    return util.pool.submit(task)
 
 def _write_tile_data(tiles:PMap[IVec2, BaseArrayTile | FillTile], config:_SerializeConfig):
     tile_map_data = []
@@ -144,14 +147,14 @@ def _write_tile_data(tiles:PMap[IVec2, BaseArrayTile | FillTile], config:_Serial
         config.progress_update()
     return tile_map_data
 
-def _read_mask(mask, tile_data):
+def _read_mask(mask, zfile:zipfile.ZipFile):
     if mask is None:
         return None
     return Mask(
         position=mask['position'],
-        alpha=_read_tile_data(mask['alpha'], tile_data),
+        alpha=_read_tile_data(mask['alpha'], zfile),
         visible=mask['visible'],
-        background_color=tile_data[mask['background_color']['path']],
+        background_color=_read_ndarray(mask['background_color'], zfile),
     )
 
 def _write_mask(mask:Mask | None, config:_SerializeConfig):
@@ -164,7 +167,7 @@ def _write_mask(mask:Mask | None, config:_SerializeConfig):
         'background_color': _write_ndarray(mask.background_color, config),
     }
 
-def _read_sublayers(layers, tile_data):
+def _read_sublayers(layers, zfile:zipfile.ZipFile):
     layer_data = []
     for sublayer in layers:
         layer_constructor = _layer_types[sublayer['type']]
@@ -179,13 +182,13 @@ def _read_sublayers(layers, tile_data):
             'lock_all': sublayer['lock_all'],
             'clip': sublayer['clip'],
             'id': sublayer['id'],
-            'mask': _read_mask(sublayer['mask'], tile_data)
+            'mask': _read_mask(sublayer['mask'], zfile)
         }
         if layer_constructor is PixelLayer:
-            layer_args['color'] = _read_tile_data(sublayer['color'], tile_data)
+            layer_args['color'] = _read_tile_data(sublayer['color'], zfile)
             layer_args['position'] = sublayer['position']
         elif layer_constructor is GroupLayer:
-            layer_args['layers'] = _read_sublayers(sublayer['layers'], tile_data)
+            layer_args['layers'] = _read_sublayers(sublayer['layers'], zfile)
             layer_args['folder_open'] = sublayer['folder_open']
         layer_data.append(layer_constructor(**layer_args))
     return pvector(layer_data)
@@ -216,44 +219,18 @@ def _write_sublayers(layers:GroupLayer | list[BaseLayer], config):
         layers_data.append(sublayer_data)
     return layers_data
 
-def _gather_tiles(tiles):
-    for tile in tiles:
-        yield tile['data']
-
-def _gather_mask(mask):
-    if mask is not None:
-        yield from _gather_tiles(mask['alpha'])
-        yield mask['background_color']
-
-def _gather_layers(layers):
-    for sublayer in layers:
-        yield from _gather_mask(sublayer['mask'])
-        if sublayer['type'] == 'PixelLayer':
-            yield from _gather_tiles(sublayer['color'])
-        elif sublayer['type'] == 'GroupLayer':
-            yield from _gather_layers(sublayer['layers'])
-
-def _read_all_tiles(canvas_data, zfile:zipfile.ZipFile):
-    data = {}
-    for tile_data in itertools.chain(
-            _gather_layers(canvas_data['top_level']),
-            [canvas_data['background']['color']],
-            _gather_mask(canvas_data['selection'])):
-        data[tile_data['path']] = _read_ndarray(tile_data, zfile)
-    return data
-
 def read(file_path:Path) -> Canvas:
     with zipfile.ZipFile(file_path, 'r') as zfile:
         canvas_data = json.loads(zfile.read('canvas.json').decode())
-        tile_data = _read_all_tiles(canvas_data, zfile)
         background = canvas_data['background']
-        background['color'] = tile_data[background['color']['path']]
-        return Canvas(
+        background['color'] = _read_ndarray(background['color'], zfile)
+        composite = util.pool.submit(lambda: _read_ndarray(canvas_data['composite'], zfile))
+        return reify_canvas_futures(Canvas(
             size=tuple(canvas_data['size']),
-            top_level=_read_sublayers(canvas_data['top_level'], tile_data),
+            top_level=_read_sublayers(canvas_data['top_level'], zfile),
             background=BackgroundSettings(**background),
-            selection=_read_mask(canvas_data['selection'], tile_data)
-        )
+            selection=_read_mask(canvas_data['selection'], zfile)
+        ))
 
 def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_callback=None):
     with (tempfile.NamedTemporaryFile(dir=file_path.parent, prefix=file_path.name, delete=False, delete_on_close=False) as temp,

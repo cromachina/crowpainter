@@ -129,10 +129,13 @@ def _get_group_folder_settings(layer:psdl.Layer):
     lsct = blocks.get(psdc.Tag.SECTION_DIVIDER_SETTING, None)
     return lsct.data.kind == psdc.SectionDivider.OPEN_FOLDER
 
-def _get_layer_channel(layer:psdl.Layer, channel):
-    data = _layer_numpy(layer, channel)
-    tile_type = ColorTile if channel == 'color' else AlphaTile
-    return pixel_data_to_tiles(data)
+def _get_layer_channel(layer:psdl.Layer, channel, prune=False):
+    def task():
+        data = pixel_data_to_tiles(_layer_numpy(layer, channel))
+        if prune:
+            data = prune_tiles(data)
+        return data
+    return util.pool.submit(task)
 
 def _get_mask(layer:psdl.Layer):
     if layer.mask:
@@ -170,7 +173,7 @@ def _get_group_layer_properties(layer:psdl.Layer):
 
 def _get_pixel_layer_properties(layer:psdl.Layer):
     return {
-        'color': prune_tiles(_get_layer_channel(layer, 'color')),
+        'color': _get_layer_channel(layer, 'color', True),
         'position': (layer.top, layer.left),
     }
 
@@ -207,11 +210,11 @@ def read(file_path:Path) -> Canvas:
             if pure:
                 bg = BackgroundSettings(color=full_color)
                 psd_file._layers.pop(0)
-    return Canvas(
+    return reify_canvas_futures(Canvas(
         size=(psd_file.height, psd_file.width),
         top_level=_build_sublayers(psd_file),
         background=bg,
-    )
+    ))
 
 # TODO: psd-tools says it doesn't support adding layers to a PSD
 # but I think I can hack it to make it work, which would probably

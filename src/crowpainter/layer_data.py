@@ -163,3 +163,18 @@ def prune_tiles(tiles:PMap[IVec2, ColorTile]):
         if has_alpha:
             new_tiles[index] = tile
     return pmap(new_tiles)
+
+def reify_layer_futures(layer:BaseLayer):
+    if layer.mask:
+        mask = layer.mask.set(alpha=layer.mask.alpha.result())
+    else:
+        mask = None
+    if isinstance(layer, PixelLayer):
+        return layer.set(color=layer.color.result(), mask=mask)
+    else:
+        return layer.set(layers=layer.layers.transform([ny], reify_layer_futures), mask=mask)
+
+def reify_canvas_futures(canvas:Canvas):
+    return canvas.set(
+        top_level=canvas.top_level.transform([ny], reify_layer_futures),
+        selection=canvas.selection.set(alpha=canvas.selection.alpha.result()) if canvas.selection else None)

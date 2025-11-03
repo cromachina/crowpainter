@@ -1,5 +1,4 @@
 from enum import Enum, auto
-import numpy as np
 
 TILE_SIZE = (256, 256)
 
