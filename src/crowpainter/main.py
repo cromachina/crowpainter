@@ -77,9 +77,8 @@ def show_error_message(text):
     dispatch_to_main_thread(lambda: ExtendedInfoMessage(title='Error', text=text).exec())
 
 class CanvasState():
-    def __init__(self, initial_state:layer_data.Canvas, file_path:Path, on_filesystem:bool):
+    def __init__(self, initial_state:layer_data.Canvas, file_path:Path):
         self.file_path = file_path
-        self.on_filesystem = on_filesystem
         self.current_index = 0
         self.saved_state = initial_state
         self.selected_objects = []
@@ -186,9 +185,10 @@ def matrix_to_QTransform(matrix:np.ndarray) -> QTransform:
     t = QTransform().setMatrix(m[0,0], m[0,1], m[0,2], m[1,0], m[1,1], m[1,2], m[2,0], m[2,1], m[2,2])
     return t
 
-async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=None, offset:layer_data.IVec2=(0, 0), progress_callback=None):
-    if progress_callback is None:
-        progress_callback = lambda _: None
+def do_nothing(*args, **kwargs):
+    pass
+
+async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=None, offset:layer_data.IVec2=(0, 0), progress_callback=do_nothing):
     if size is None:
         size = canvas.size
     if canvas.background.transparent:
@@ -533,11 +533,44 @@ image_filter = ';;'.join(all_images_filter + sub_images_filter)
 class JpgWriterDialog(QDialog):
     pass
 
+class SignalProgressBar(QProgressBar):
+    update_progress = Signal(float)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.update_progress.connect(lambda value: self.setValue(int(value * 100)))
+
+    # Normalized value (0 to 1); Thread safe.
+    def update_value(self, value):
+        self.update_progress.emit(value)
+
+class ProgressDialog(QDialog):
+    def __init__(self, parent=None, text='', cancellable=False):
+        super().__init__(parent)
+        self.setMinimumWidth(250)
+        self.text = QLabel(text=text)
+        self.progress_bar = SignalProgressBar()
+        self.cancel_button = QDialogButtonBox(standardButtons=QDialogButtonBox.StandardButton.Cancel)
+        self.cancel_button.rejected.connect(self.reject)
+        self.cancel_button.setVisible(cancellable)
+        layout = QVBoxLayout()
+        layout.addWidget(self.text)
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.cancel_button)
+        self.setLayout(layout)
+        self.setModal(True)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+
+    def update_value(self, value):
+        self.progress_bar.update_value(value)
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.settings = QSettings()
         self.setWindowTitle('CrowPainter')
-        self.setGeometry(0, 0, 1000, 1000)
+        self.setGeometry(self.settings.value('window/geometry', type=QRect, defaultValue=QRect(0, 0, 1000, 1000)))
+
         self.viewport_tab = QTabWidget(self)
         self.viewport_tab.setTabsClosable(True)
         self.viewport_tab.tabCloseRequested.connect(self.on_tab_close_requested)
@@ -552,6 +585,11 @@ class MainWindow(QMainWindow):
         self.layer_panel_dock.setWidget(self.scroll_area)
 
         self.create_menus()
+        self.open_lock = asyncio.Lock()
+
+    def closeEvent(self, event):
+        self.settings.setValue('window/geometry', self.geometry())
+        return super().closeEvent(event)
 
     def on_tab_close_requested(self, index):
         widget = self.viewport_tab.widget(index)
@@ -572,63 +610,103 @@ class MainWindow(QMainWindow):
         pass
 
     def on_open(self):
-        files, _ = QFileDialog.getOpenFileNames(self, filter=image_filter, dir='.')
+        dialog = QFileDialog(self)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+        dialog.setNameFilter(image_filter)
+        dialog.setDirectory(self.settings.value('lastdir', '.'))
+        dialog.setModal(True)
+        dialog.filesSelected.connect(lambda files: asyncio.ensure_future(self.open_files(files)))
+        dialog.show()
+
+    async def open_files(self, files):
         for file_path in files:
             # TODO check if file is already open and ask to reopen without saving.
-            asyncio.create_task(self.open(file_path))
+            await self.open(file_path)
 
     def on_save(self):
         pass
 
     @contextlib.contextmanager
-    def progress_bar(self):
+    def progress_status_bar(self):
         try:
-            prog = QProgressBar()
+            prog = SignalProgressBar()
             self.statusBar().addWidget(prog)
-            class SigHolder(QObject):
-                update_progress = Signal(float)
-            sig = SigHolder(prog)
-            sig.update_progress.connect(lambda f: prog.setValue(int(f * 100)))
-            yield sig.update_progress.emit
+            yield prog
         finally:
             self.statusBar().removeWidget(prog)
             prog.deleteLater()
 
+    @contextlib.contextmanager
+    def progress_dialog(self, text):
+        try:
+            prog = ProgressDialog(self, text)
+            prog.show()
+            yield prog
+        finally:
+            prog.close()
+            prog.deleteLater()
+
     def on_save_as(self):
-        widget:Viewport = self.viewport_tab.currentWidget()
-        if widget is None:
+        viewport:Viewport = self.viewport_tab.currentWidget()
+        if viewport is not None:
+            dialog = QFileDialog(self)
+            dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+            dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+            dialog.setNameFilter(image_filter)
+            dialog.setDirectory(self.settings.value('lastdir', '.', type=str))
+            dialog.setModal(True)
+            dialog.fileSelected.connect(lambda file: asyncio.ensure_future(self._save_file(file, viewport)))
+            dialog.show()
+
+    async def _save_file(self, file_path, viewport, modal=False):
+        if file_path == '':
             return
+        current_canvas = viewport.canvas_state.get_current()
+        current_composite = viewport.composite_image
+        self.settings.setValue('lastdir', str(Path(file_path).parent))
+        if modal:
+            progress = self.progress_dialog(f'Saving {current_canvas.name}')
         else:
-            file_path, _ = QFileDialog.getSaveFileName(self, filter=image_filter, dir='.')
-            if file_path == '':
-                return
-            current_canvas = widget.canvas_state.get_current()
-            current_composite = widget.composite_image
-            async def task():
-                with self.progress_bar() as callback, timeit(f'save {file_path}'):
-                    result = await util.peval(self.save, current_canvas, current_composite, file_path, callback)
-                widget.canvas_state.set_saved(current_canvas)
-            asyncio.create_task(task())
+            progress = self.progress_status_bar()
+        with progress as progress_widget, timeit(f'save {file_path}'):
+            result = await util.peval(self.save, current_canvas, current_composite, file_path, progress_widget.update_value)
+        viewport.canvas_state.set_saved(current_canvas)
 
     def on_close(self):
         pass
 
     async def open(self, file_path):
         file_path = Path(file_path)
-        with self.progress_bar() as callback, timeit(f'open {file_path}'):
-            with timeit(f'open file read {file_path}'):
-                canvas = await open_file(file_path)
-            canvas_state = CanvasState(
-                initial_state=canvas,
-                file_path=file_path,
-                on_filesystem=True
-            )
-            with timeit(f'open composite {file_path}'):
-                composite_image = await parallel_composite(canvas, progress_callback=callback)
-            viewport = Viewport(canvas_state=canvas_state, initial_composite=composite_image)
-            index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
-            self.viewport_tab.setCurrentIndex(index)
-        #util.update_memory_tracking()
+        self.settings.setValue('lastdir', str(file_path.parent))
+        current_task = None
+        with self.progress_dialog(text=f'Opening {file_path.name}') as progress:
+            def cancel_open():
+                if current_task is not None:
+                    current_task.cancel('Open cancelled')
+            progress.rejected.connect(cancel_open)
+            try:
+                with timeit(f'open {file_path}'):
+                    with timeit(f'open file read {file_path}'):
+                        current_task = asyncio.create_task(open_file(file_path))
+                        canvas = await current_task
+                    do_composite = True
+                    if isinstance(canvas, tuple):
+                        do_composite = False
+                        canvas, composite_image = canvas
+                    canvas_state = CanvasState(
+                        initial_state=canvas,
+                        file_path=file_path,
+                    )
+                    if do_composite:
+                        with timeit(f'open composite {file_path}'):
+                            current_task = asyncio.create_task(parallel_composite(canvas, progress_callback=progress.update_value))
+                            composite_image = await current_task
+                    viewport = Viewport(canvas_state=canvas_state, initial_composite=composite_image)
+                    index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
+                    self.viewport_tab.setCurrentIndex(index)
+            except asyncio.CancelledError:
+                pass
 
     def save(self, canvas:layer_data.Canvas, composite:np.ndarray, file_path, progress_callback):
         file_path = Path(file_path)
