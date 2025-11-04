@@ -8,20 +8,14 @@ import sys
 import numpy as np
 
 from ..layer_data import *
-from . import rle_native
+from . import rle
 from .. import blendfuncs
 
 # Similar in concept to OpenRaster, except JSON for the index and tiles as raw byte arrays.
 VERSION = 0
 
 _layer_types = { t.__name__: t for t in [PixelLayer, GroupLayer] }
-_tile_types = { t.__name__: t for t in [ColorTile, AlphaTile, FillTile] }
-
-def decode(dst:np.ndarray, src:np.ndarray):
-    return rle_native.decode(dst, src)
-
-def encode(dst:np.ndarray, src:np.ndarray):
-    return rle_native.encode(dst, src)
+_tile_types = { t.__name__: t for t in [PixelTile, FillTile] }
 
 def _id_generator(init=0):
     while True:
@@ -40,11 +34,11 @@ def count_tiles(layers):
     count = 0
     for layer in layers:
         if isinstance(layer, PixelLayer):
-            count += len(layer.color)
+            count += len(layer.data)
         if isinstance(layer, GroupLayer):
             count += count_tiles(layer.layers)
         if layer.mask is not None:
-            count += len(layer.mask.alpha)
+            count += len(layer.mask.data)
     return count
 
 class _SerializeConfig():
@@ -73,7 +67,7 @@ def _to_rle(array:np.ndarray, is_bytes=False) -> tuple[list[str], list[np.ndarra
     for channel in range(array.shape[2]):
         dst = np.empty_like(array, shape=dims)
         src = array[:,:,channel]
-        size = encode(dst, src.reshape(dims))
+        size = rle.encode(dst, src.reshape(dims))
         if size == 0:
             data.append(('RAW', src))
         else:
@@ -95,7 +89,7 @@ def _read_ndarray(array_info, zfile:zipfile.ZipFile, is_bytes=False):
                 array[:,:,channel] = encoded.reshape(shape[:2])[:]
             else:
                 dims = (array.shape[0] * array.shape[1],)
-                decode(array[:,:,channel].reshape(dims), encoded)
+                rle.decode(array[:,:,channel].reshape(dims), encoded)
         if is_bytes:
             return array
         else:
@@ -135,7 +129,7 @@ def _read_tile_data(tile_info_list, zfile:zipfile.ZipFile):
         return pmap(tile_map_data)
     return util.pool.submit(task)
 
-def _write_tile_data(tiles:PMap[IVec2, BaseArrayTile | FillTile], config:_SerializeConfig):
+def _write_tile_data(tiles:PMap[IVec2, PixelTile | FillTile], config:_SerializeConfig):
     tile_map_data = []
     for index, tile in tiles.items():
         tile_data = {
@@ -156,7 +150,7 @@ def _read_mask(mask, zfile:zipfile.ZipFile):
         return None
     return Mask(
         position=mask['position'],
-        alpha=_read_tile_data(mask['alpha'], zfile),
+        data=_read_tile_data(mask['data'], zfile),
         visible=mask['visible'],
         background_color=_read_ndarray(mask['background_color'], zfile),
     )
@@ -166,7 +160,7 @@ def _write_mask(mask:Mask | None, config:_SerializeConfig):
         return None
     return {
         'position': mask.position,
-        'alpha': _write_tile_data(mask.alpha, config),
+        'data': _write_tile_data(mask.data, config),
         'visible': mask.visible,
         'background_color': _write_ndarray(mask.background_color, config),
     }
@@ -189,7 +183,7 @@ def _read_sublayers(layers, zfile:zipfile.ZipFile):
             'mask': _read_mask(sublayer['mask'], zfile)
         }
         if layer_constructor is PixelLayer:
-            layer_args['color'] = _read_tile_data(sublayer['color'], zfile)
+            layer_args['data'] = _read_tile_data(sublayer['data'], zfile)
             layer_args['position'] = sublayer['position']
         elif layer_constructor is GroupLayer:
             layer_args['layers'] = _read_sublayers(sublayer['layers'], zfile)
@@ -215,7 +209,7 @@ def _write_sublayers(layers:GroupLayer | list[BaseLayer], config):
             'mask': _write_mask(sublayer.mask, config)
         }
         if isinstance(sublayer, PixelLayer):
-            sublayer_data['color'] = _write_tile_data(sublayer.color, config)
+            sublayer_data['data'] = _write_tile_data(sublayer.data, config)
             sublayer_data['position'] = sublayer.position
         elif isinstance(sublayer, GroupLayer):
             sublayer_data['layers'] = _write_sublayers(sublayer.layers, config)

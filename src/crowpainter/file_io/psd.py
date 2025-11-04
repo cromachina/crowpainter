@@ -1,4 +1,6 @@
 from pathlib import Path
+import struct
+import io
 
 import psd_tools
 import psd_tools.constants as psdc
@@ -102,7 +104,7 @@ def _layer_numpy(layer:psdl.Layer, channel_name=None):
     else:
         width, height = layer.width, layer.height
 
-    decoded = [blendfuncs.parse_array(rle.decode(channel.data, width, height, depth, version), depth) for channel in channels]
+    decoded = [blendfuncs.parse_array(rle.decode_counts(channel.data, width, height, depth, version), depth) for channel in channels]
     if is_color and not has_alpha:
         decoded.append(np.full_like(decoded[0], blendfuncs.get_max()))
 
@@ -141,7 +143,7 @@ def _get_mask(layer:psdl.Layer):
     if layer.mask:
         return Mask(
             position=(layer.mask.top, layer.mask.left),
-            alpha=_get_layer_channel(layer, 'mask'),
+            data=_get_layer_channel(layer, 'mask'),
             visible=not layer.mask.disabled,
             background_color=blendfuncs.from_bytes(np.uint8(layer.mask.background_color)),
         )
@@ -173,7 +175,7 @@ def _get_group_layer_properties(layer:psdl.Layer):
 
 def _get_pixel_layer_properties(layer:psdl.Layer):
     return {
-        'color': _get_layer_channel(layer, 'color', True),
+        'data': _get_layer_channel(layer, 'color', True),
         'position': (layer.top, layer.left),
     }
 
@@ -216,8 +218,40 @@ def read(file_path:Path) -> Canvas:
         background=bg,
     ))
 
+class RLEData:
+    def __init__(self, layer:PixelLayer, channel):
+        self.counts = np.empty()
+        self.rows = np.array()
+
+class PackPixelLayer:
+    def __init__(self, layer:PixelLayer):
+        self.layer = layer
+
+def _write_header(canvas:Canvas, fp):
+    fp.write(struct.pack('>4sH6xHIIHHI', b'8BPS', 1, 4, canvas.size[1], canvas.size[0], 8, 3, 0))
+
+def _write_layer_record(layer:BaseLayer, fp):
+    layer_info = io.BytesIO()
+    fp.write(struct.pack('>4iH'))
+    if isinstance(layer, GroupLayer):
+        pass
+    else:
+        pass
+
+def _write_layers(canvas:Canvas, fp):
+    pass
+
+def _write_layer_data(canvas:Canvas, fp):
+    pass
+
+def _compress_layer_data(layer):
+    pass
+
 # TODO: psd-tools says it doesn't support adding layers to a PSD
 # but I think I can hack it to make it work, which would probably
 # save a lot of pain trying to write a PSD exporter from scratch.
-def write(canvas:Canvas, file_path:Path):
-    raise NotImplementedError()
+def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path):
+    with open(file_path, 'wb') as fp:
+        _write_header(canvas, fp)
+        _write_layers(canvas, fp)
+        _write_layer_data(canvas, fp)

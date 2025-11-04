@@ -1,5 +1,4 @@
 from __future__ import annotations
-from typing import Self
 
 from pyrsistent import *
 import numpy as np
@@ -8,17 +7,16 @@ from .constants import *
 from . import util, blendfuncs
 
 IVec2 = tuple[int, int]
-DVec4 = tuple[float, float, float, float]
 
 class SelectableObject(PClass):
     id:int = field(initial=0)
 
-class BaseArrayTile(PClass):
+class PixelTile(PClass):
     data:np.ndarray = field(mandatory=True)
 
-    @classmethod
-    def from_data(cls, data, lock=True):
-        tile = cls(data=data)
+    @staticmethod
+    def from_data(data, lock=True):
+        tile = PixelTile(data=data)
         if lock:
             tile.lock()
         return tile
@@ -26,27 +24,36 @@ class BaseArrayTile(PClass):
     def lock(self):
         self.data.flags.writeable=False
 
-class ColorTile(BaseArrayTile):
-    def make(size:IVec2, lock=True):
-        return Self.from_data(np.zeros(size + (4,), dtype=blendfuncs.dtype), lock)
+    def get_size(self):
+        return self.data.shape[:2]
 
-class AlphaTile(BaseArrayTile):
-    def make(size:IVec2, lock=True):
-        return Self.from_data(np.zeros(size + (1,), dtype=blendfuncs.dtype), lock)
+    @staticmethod
+    def make_color_tile(size:IVec2, lock=True):
+        return PixelTile.from_data(np.zeros(size + (4,), dtype=blendfuncs.dtype), lock)
+
+    @staticmethod
+    def make_alpha_tile(size:IVec2, lock=True):
+        return PixelTile.from_data(np.zeros(size + (1,), dtype=blendfuncs.dtype), lock)
 
 class FillTile(PClass):
     size:IVec2 = field()
     value:np.ndarray | blendfuncs.dtype = field()
 
+    def get_size(self):
+        return self.size
+
+Tile = PixelTile | FillTile
+
 class Mask(SelectableObject):
     position:IVec2 = field(initial=(0, 0))
-    alpha:PMap[IVec2, AlphaTile] = field(initial=pmap())
+    data:PMap[IVec2, PixelTile] = field(initial=pmap())
+    channels:int = 1
     visible:bool = field(initial=True)
     background_color:blendfuncs.dtype = field(initial=blendfuncs.dtype(0))
 
     def get_mask_data(self, size:IVec2, target_offset:IVec2):
         mask = np.full(size + (1,), self.background_color, dtype=blendfuncs.dtype)
-        masks = get_overlap_regions(self.alpha, self.position, mask, target_offset)
+        masks = get_overlap_regions(self.data, self.position, mask, target_offset)
         if not masks:
             return None
         for region in masks.values():
@@ -54,7 +61,7 @@ class Mask(SelectableObject):
         return mask
 
     def thaw(self):
-        return self.set(alpha=thaw(self.alpha))
+        return self.set(alpha=thaw(self.data))
 
 class BaseLayer(SelectableObject):
     name:str = field(initial="")
@@ -76,13 +83,14 @@ class BaseLayer(SelectableObject):
 
 class PixelLayer(BaseLayer):
     position:IVec2 = field(initial=(0, 0))
-    color:PMap[IVec2, ColorTile] = field(initial=pmap())
+    data:PMap[IVec2, PixelTile] = field(initial=pmap())
+    channels:int = 4
 
     def get_pixel_data(self, target_color_buffer:np.ndarray, target_offset:IVec2):
-        return get_overlap_regions(self.color, self.position, target_color_buffer, target_offset)
+        return get_overlap_regions(self.data, self.position, target_color_buffer, target_offset)
 
     def thaw(self):
-        return self.set(color=thaw(self.color), alpha=thaw(self.color))
+        return self.set(color=thaw(self.data), alpha=thaw(self.data))
 
 class GroupLayer(BaseLayer):
     layers:PVector[BaseLayer] = field(initial=pvector())
@@ -115,7 +123,7 @@ class Canvas(PClass):
             selection=self.selection.thaw() if self.selection is not None else None
         )
 
-def get_overlap_regions(tiles:PMap[IVec2, BaseArrayTile | FillTile], tiles_offset:IVec2, target_buffer:np.ndarray, target_offset:IVec2) -> dict[IVec2, tuple[np.ndarray, np.ndarray | blendfuncs.dtype]]:
+def get_overlap_regions(tiles:PMap[IVec2, Tile], tiles_offset:IVec2, target_buffer:np.ndarray, target_offset:IVec2) -> dict[IVec2, tuple[np.ndarray, np.ndarray | blendfuncs.dtype]]:
     regions = dict()
     relative_offset = np.array(tiles_offset) - np.array(target_offset)
     for point in util.generate_points(target_buffer.shape[:2], TILE_SIZE):
@@ -135,7 +143,27 @@ def get_overlap_regions(tiles:PMap[IVec2, BaseArrayTile | FillTile], tiles_offse
                 regions[tuple(absolute_offset)] = overlap_tiles
     return regions
 
-def pixel_data_to_tiles(data:np.ndarray | None):
+def tiles_to_pixel_data(layer:PixelLayer | Mask) -> tuple[IVec2, np.ndarray]:
+    tl = np.array([0, 0])
+    br = np.array([0, 0])
+    for offset, tile in layer.data:
+        offset = np.array(offset) * (TILE_SIZE + np.array(layer.position))
+        off_size = np.array(tile.get_size()) + offset
+        tl = np.minimum(tl, offset)
+        br = np.maximum(br, off_size)
+    size = np.abs(br - tl)
+    if isinstance(layer, PixelLayer):
+        fill_value = 0
+    else:
+        fill_value = blendfuncs.tobytes(layer.background_color)
+    data = np.full_like(shape=tuple(size) + (layer.channels,), fill_value=fill_value, dtype=np.uint8)
+    for offset, tile in layer.data:
+        offset = np.array(offset) * (TILE_SIZE + np.array(layer.position))
+        util.blit(data, blendfuncs.tobytes(tile), offset)
+    extents = (tl[0], tl[1], br[0], br[1])
+    return extents, data
+
+def pixel_data_to_tiles(data:np.ndarray | None) -> PMap[IVec2, Tile]:
     if data is None:
         return pmap()
     tiles = {}
@@ -144,18 +172,18 @@ def pixel_data_to_tiles(data:np.ndarray | None):
         tile = np.zeros(shape=size + data.shape[2:], dtype=blendfuncs.dtype)
         util.blit(tile, data, -offset)
         index = tuple(offset // TILE_SIZE)
-        tiles[index] = ColorTile.from_data(tile)
+        tiles[index] = PixelTile.from_data(tile)
     return pmap(tiles)
 
-def scalar_to_tiles(value, shape, tile_constructor):
+def scalar_to_tiles(value, shape) -> PMap[IVec2, PixelTile]:
     tiles = {}
     for (size, offset) in util.generate_tiles(shape[:2], TILE_SIZE):
         tile = np.full(shape=size + shape[2:], fill_value=value, dtype=blendfuncs.dtype)
         index = tuple(np.array(offset) // TILE_SIZE)
-        tiles[index] = tile_constructor.from_data(tile)
+        tiles[index] = PixelTile.from_data(tile)
     return pmap(tiles)
 
-def prune_tiles(tiles:PMap[IVec2, ColorTile]):
+def prune_tiles(tiles:PMap[IVec2, PixelTile]) -> PMap[IVec2, PixelTile]:
     new_tiles = {}
     for index, tile in tiles.items():
         alpha = util.get_alpha(tile.data)
@@ -164,17 +192,17 @@ def prune_tiles(tiles:PMap[IVec2, ColorTile]):
             new_tiles[index] = tile
     return pmap(new_tiles)
 
-def reify_layer_futures(layer:BaseLayer):
+def reify_layer_futures(layer:BaseLayer) -> BaseLayer:
     if layer.mask:
-        mask = layer.mask.set(alpha=layer.mask.alpha.result())
+        mask = layer.mask.set(data=layer.mask.data.result())
     else:
         mask = None
     if isinstance(layer, PixelLayer):
-        return layer.set(color=layer.color.result(), mask=mask)
+        return layer.set(data=layer.data.result(), mask=mask)
     else:
         return layer.set(layers=layer.layers.transform([ny], reify_layer_futures), mask=mask)
 
-def reify_canvas_futures(canvas:Canvas):
+def reify_canvas_futures(canvas:Canvas) -> Canvas:
     return canvas.set(
         top_level=canvas.top_level.transform([ny], reify_layer_futures),
-        selection=canvas.selection.set(alpha=canvas.selection.alpha.result()) if canvas.selection else None)
+        selection=canvas.selection.set(alpha=canvas.selection.data.result()) if canvas.selection else None)
