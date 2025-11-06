@@ -162,8 +162,9 @@ def tiles_to_pixel_data(layer:PixelLayer | Mask) -> tuple[IVec2, np.ndarray]:
         return (0, 0, 0, 0), np.empty((0,), dtype=np.uint8)
     tl = None
     br = None
+    pos = np.array(layer.position)
     for offset, tile in layer.data.items():
-        offset = (np.array(offset) * TILE_SIZE) + np.array(layer.position)
+        offset = (np.array(offset) * TILE_SIZE) + pos
         off_size = np.array(tile.get_size()) + offset
         if tl is None:
             tl = offset
@@ -179,8 +180,9 @@ def tiles_to_pixel_data(layer:PixelLayer | Mask) -> tuple[IVec2, np.ndarray]:
         fill_value = blendfuncs.to_bytes(layer.background_color)
         channels = 1
     data = np.full(shape=tuple(size) + (channels,), fill_value=fill_value, dtype=np.uint8)
+    tile_space_offset = tl - pos
     for offset, tile in layer.data.items():
-        offset = (np.array(offset) * TILE_SIZE) + np.array(layer.position)
+        offset = (np.array(offset) * TILE_SIZE) - tile_space_offset
         util.blit(data, blendfuncs.to_bytes(tile.data), offset)
     extents = (tl[0], tl[1], br[0], br[1])
     return extents, data
