@@ -13,14 +13,14 @@
 
 # Alternatively, just do it the dumb way since most brush strokes are probably small enough for it
 
-from . import blendfuncs, util
-from .constants import *
-from .layer_data import *
+import numpy as np
+
+from . import blendfuncs, constants, layer_data, util
 
 def check_lock(arr):
     return arr if isinstance(arr, np.ndarray) and arr.flags.writeable else None
 
-def get_layer_and_clip_groupings(layers:GroupLayer | list [BaseLayer]):
+def get_layer_and_clip_groupings(layers:layer_data.GroupLayer | list [layer_data.BaseLayer]):
     grouped_layers = []
     clip_stack = []
     for layer in reversed(layers):
@@ -28,7 +28,7 @@ def get_layer_and_clip_groupings(layers:GroupLayer | list [BaseLayer]):
             clip_stack.append(layer)
         else:
             clip_stack.reverse()
-            if layer.blend_mode == BlendMode.PASS:
+            if layer.blend_mode == constants.BlendMode.PASS:
                 for sublayer in clip_stack:
                     grouped_layers.append((sublayer, []))
                 grouped_layers.append((layer, []))
@@ -40,20 +40,20 @@ def get_layer_and_clip_groupings(layers:GroupLayer | list [BaseLayer]):
     grouped_layers.reverse()
     return grouped_layers
 
-def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndarray):
+def composite(layer:layer_data.GroupLayer | list[layer_data.BaseLayer], offset:layer_data.IVec2, backdrop:np.ndarray):
     for sublayer, clip_layers in get_layer_and_clip_groupings(layer):
         if not sublayer.visible:
             continue
         blend_mode = sublayer.blend_mode
 
-        if isinstance(sublayer, GroupLayer):
-            if blend_mode == BlendMode.PASS:
+        if isinstance(sublayer, layer_data.GroupLayer):
+            if blend_mode == constants.BlendMode.PASS:
                 next_backdrop = backdrop.copy()
             else:
                 next_backdrop = np.zeros_like(backdrop)
             color_src = composite(sublayer, offset, next_backdrop)
             pixel_srcs = { offset: (backdrop, color_src) }
-        elif isinstance(sublayer, PixelLayer):
+        elif isinstance(sublayer, layer_data.PixelLayer):
             pixel_srcs = sublayer.get_pixel_data(backdrop, offset)
 
         opacity = sublayer.opacity
@@ -63,7 +63,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndar
 
             # A pass-through layer has already been blended, so just lerp instead.
             # NOTE: Clipping layers do not apply to pass layers, as if clipping were simply disabled.
-            if blend_mode == BlendMode.PASS:
+            if blend_mode == constants.BlendMode.PASS:
                 if mask_src is None:
                     mask_src = opacity
                 else:
@@ -73,7 +73,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndar
                 color_src = util.get_color(sub_color_src)
                 alpha_src = util.get_alpha(sub_color_src)
 
-                if isinstance(sublayer, GroupLayer):
+                if isinstance(sublayer, layer_data.GroupLayer):
                     # Un-multiply group composites so that we can multiply group opacity correctly
                     color_src = blendfuncs.clip_divide(color_src, alpha_src, out=check_lock(color_src))
 
@@ -103,7 +103,7 @@ def composite(layer:GroupLayer | list[BaseLayer], offset:IVec2, backdrop:np.ndar
                     color_src = blend_func(color_dst, color_src, alpha_dst, alpha_src, out=check_lock(color_src))
 
                 # Premultiplied blending may cause out-of-range values, so it must be clipped.
-                if blend_mode != BlendMode.NORMAL:
+                if blend_mode != constants.BlendMode.NORMAL:
                     color_src = blendfuncs.clip(color_src, out=check_lock(color_src))
 
                 # We apply the mask last and LERP the blended result onto the destination.

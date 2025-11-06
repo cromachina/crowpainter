@@ -1,27 +1,28 @@
 from pathlib import Path
 
 import cv2
+import numpy as np
+from pyrsistent import *
 
-from ..layer_data import *
-from .. import blendfuncs
+from .. import blendfuncs, layer_data
 
-def read(file_path:Path) -> Canvas:
+def read(file_path:Path) -> layer_data.Canvas:
     data = cv2.imread(str(file_path), cv2.IMREAD_UNCHANGED)
     if data is None:
         raise Exception('Error opening file', file_path)
     if data.shape[2] == 3:
         data = cv2.cvtColor(data, cv2.COLOR_BGR2RGBA)
-        bg = BackgroundSettings()
+        bg = layer_data.BackgroundSettings()
     else:
         data = cv2.cvtColor(data, cv2.COLOR_BGRA2RGBA)
-        bg = BackgroundSettings(transparent=True)
-    tiles = pixel_data_to_tiles(blendfuncs.from_bytes(data))
-    layer = PixelLayer(
+        bg = layer_data.BackgroundSettings(transparent=True)
+    tiles = layer_data.pixel_data_to_tiles(blendfuncs.from_bytes(data))
+    layer = layer_data.PixelLayer(
         name="Layer1",
         data=tiles,
     )
-    return Canvas(
-        top_level=GroupLayer(layers=pvector([layer])),
+    return layer_data.Canvas(
+        top_level=layer_data.GroupLayer(layers=pvector([layer])),
         size=data.shape[:2],
         background=bg,
     ), data

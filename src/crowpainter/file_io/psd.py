@@ -7,51 +7,50 @@ import logging
 import psd_tools
 import psd_tools.constants as psdc
 import psd_tools.api.layers as psdl
+import numpy as np
+from pyrsistent import *
 
 from . import rle
-from .. import util
-from ..layer_data import *
-from ..constants import *
-from .. import blendfuncs
+from .. import blendfuncs, constants, layer_data, util
 
 _from_psd_blendmode = {
-    psdc.BlendMode.PASS_THROUGH: BlendMode.PASS,
-    psdc.BlendMode.NORMAL: BlendMode.NORMAL,
-    psdc.BlendMode.MULTIPLY: BlendMode.MULTIPLY,
-    psdc.BlendMode.SCREEN: BlendMode.SCREEN,
-    psdc.BlendMode.OVERLAY: BlendMode.OVERLAY,
-    psdc.BlendMode.LINEAR_BURN: BlendMode.TS_LINEAR_BURN,
-    psdc.BlendMode.LINEAR_DODGE: BlendMode.TS_LINEAR_DODGE,
-    psdc.BlendMode.LINEAR_LIGHT: BlendMode.TS_LINEAR_LIGHT,
-    psdc.BlendMode.COLOR_BURN: BlendMode.TS_COLOR_BURN,
-    psdc.BlendMode.COLOR_DODGE: BlendMode.TS_COLOR_DODGE,
-    psdc.BlendMode.VIVID_LIGHT: BlendMode.TS_VIVID_LIGHT,
-    psdc.BlendMode.HARD_LIGHT: BlendMode.HARD_LIGHT,
-    psdc.BlendMode.SOFT_LIGHT: BlendMode.SOFT_LIGHT,
-    psdc.BlendMode.PIN_LIGHT: BlendMode.PIN_LIGHT,
-    psdc.BlendMode.HARD_MIX: BlendMode.TS_HARD_MIX,
-    psdc.BlendMode.DARKEN: BlendMode.DARKEN,
-    psdc.BlendMode.LIGHTEN: BlendMode.LIGHTEN,
-    psdc.BlendMode.DARKER_COLOR: BlendMode.DARKEN_COLOR,
-    psdc.BlendMode.LIGHTER_COLOR: BlendMode.LIGHTEN_COLOR,
-    psdc.BlendMode.DIFFERENCE: BlendMode.TS_DIFFERENCE,
-    psdc.BlendMode.EXCLUSION: BlendMode.EXCLUDE,
-    psdc.BlendMode.SUBTRACT: BlendMode.SUBTRACT,
-    psdc.BlendMode.DIVIDE: BlendMode.DIVIDE,
-    psdc.BlendMode.HUE: BlendMode.HUE,
-    psdc.BlendMode.SATURATION: BlendMode.SATURATION,
-    psdc.BlendMode.COLOR: BlendMode.COLOR,
-    psdc.BlendMode.LUMINOSITY: BlendMode.LUMINOSITY,
+    psdc.BlendMode.PASS_THROUGH: constants.BlendMode.PASS,
+    psdc.BlendMode.NORMAL: constants.BlendMode.NORMAL,
+    psdc.BlendMode.MULTIPLY: constants.BlendMode.MULTIPLY,
+    psdc.BlendMode.SCREEN: constants.BlendMode.SCREEN,
+    psdc.BlendMode.OVERLAY: constants.BlendMode.OVERLAY,
+    psdc.BlendMode.LINEAR_BURN: constants.BlendMode.TS_LINEAR_BURN,
+    psdc.BlendMode.LINEAR_DODGE: constants.BlendMode.TS_LINEAR_DODGE,
+    psdc.BlendMode.LINEAR_LIGHT: constants.BlendMode.TS_LINEAR_LIGHT,
+    psdc.BlendMode.COLOR_BURN: constants.BlendMode.TS_COLOR_BURN,
+    psdc.BlendMode.COLOR_DODGE: constants.BlendMode.TS_COLOR_DODGE,
+    psdc.BlendMode.VIVID_LIGHT: constants.BlendMode.TS_VIVID_LIGHT,
+    psdc.BlendMode.HARD_LIGHT: constants.BlendMode.HARD_LIGHT,
+    psdc.BlendMode.SOFT_LIGHT: constants.BlendMode.SOFT_LIGHT,
+    psdc.BlendMode.PIN_LIGHT: constants.BlendMode.PIN_LIGHT,
+    psdc.BlendMode.HARD_MIX: constants.BlendMode.TS_HARD_MIX,
+    psdc.BlendMode.DARKEN: constants.BlendMode.DARKEN,
+    psdc.BlendMode.LIGHTEN: constants.BlendMode.LIGHTEN,
+    psdc.BlendMode.DARKER_COLOR: constants.BlendMode.DARKEN_COLOR,
+    psdc.BlendMode.LIGHTER_COLOR: constants.BlendMode.LIGHTEN_COLOR,
+    psdc.BlendMode.DIFFERENCE: constants.BlendMode.TS_DIFFERENCE,
+    psdc.BlendMode.EXCLUSION: constants.BlendMode.EXCLUDE,
+    psdc.BlendMode.SUBTRACT: constants.BlendMode.SUBTRACT,
+    psdc.BlendMode.DIVIDE: constants.BlendMode.DIVIDE,
+    psdc.BlendMode.HUE: constants.BlendMode.HUE,
+    psdc.BlendMode.SATURATION: constants.BlendMode.SATURATION,
+    psdc.BlendMode.COLOR: constants.BlendMode.COLOR,
+    psdc.BlendMode.LUMINOSITY: constants.BlendMode.LUMINOSITY,
 }
 _from_psd_special = {
-    psdc.BlendMode.LINEAR_BURN: BlendMode.LINEAR_BURN,
-    psdc.BlendMode.LINEAR_DODGE: BlendMode.LINEAR_DODGE,
-    psdc.BlendMode.LINEAR_LIGHT: BlendMode.LINEAR_LIGHT,
-    psdc.BlendMode.COLOR_BURN: BlendMode.COLOR_BURN,
-    psdc.BlendMode.COLOR_DODGE: BlendMode.COLOR_DODGE,
-    psdc.BlendMode.VIVID_LIGHT: BlendMode.VIVID_LIGHT,
-    psdc.BlendMode.HARD_MIX: BlendMode.HARD_MIX,
-    psdc.BlendMode.DIFFERENCE: BlendMode.DIFFERENCE,
+    psdc.BlendMode.LINEAR_BURN: constants.BlendMode.LINEAR_BURN,
+    psdc.BlendMode.LINEAR_DODGE: constants.BlendMode.LINEAR_DODGE,
+    psdc.BlendMode.LINEAR_LIGHT: constants.BlendMode.LINEAR_LIGHT,
+    psdc.BlendMode.COLOR_BURN: constants.BlendMode.COLOR_BURN,
+    psdc.BlendMode.COLOR_DODGE: constants.BlendMode.COLOR_DODGE,
+    psdc.BlendMode.VIVID_LIGHT: constants.BlendMode.VIVID_LIGHT,
+    psdc.BlendMode.HARD_MIX: constants.BlendMode.HARD_MIX,
+    psdc.BlendMode.DIFFERENCE: constants.BlendMode.DIFFERENCE,
 }
 
 _to_psd_blendmode = { v:k for k,v in _from_psd_blendmode.items() }
@@ -68,7 +67,7 @@ def _debug_layer(layer:psdl.Layer):
     logging.debug(f' extents: {(layer.bbox[1], layer.bbox[0], layer.bbox[3], layer.bbox[2])}')
     logging.debug(f' channels: {len(layer._channels)}')
     logging.debug(f' opacity: {layer.opacity}')
-    logging.debug(f' blendmode: {layer.blend_mode.name}')
+    logging.debug(f' constants.BlendMode: {layer.blend_mode.name}')
     logging.debug(f' flags transparency protected: {layer._record.flags.transparency_protected}')
     logging.debug(f' flags visible: {layer._record.flags.visible}')
     logging.debug(f' visible: {layer.visible}')
@@ -146,9 +145,9 @@ def _get_sai_special_mode_opacity(layer:psdl.Layer):
     tsly = blocks.get(psdc.Tag.TRANSPARENCY_SHAPES_LAYER, None)
     iOpa = blocks.get(psdc.Tag.BLEND_FILL_OPACITY, None)
     if tsly and iOpa and tsly.data == 0:
-        opacity, blend_mode = iOpa.data, _from_psd_special.get(layer.blend_mode, BlendMode.NORMAL)
+        opacity, blend_mode = iOpa.data, _from_psd_special.get(layer.blend_mode, constants.BlendMode.NORMAL)
     else:
-        opacity, blend_mode = layer.opacity, _from_psd_blendmode.get(layer.blend_mode, BlendMode.NORMAL)
+        opacity, blend_mode = layer.opacity, _from_psd_blendmode.get(layer.blend_mode, constants.BlendMode.NORMAL)
     return blendfuncs.from_bytes(np.uint8(opacity)), blend_mode
 
 def _get_group_folder_settings(layer:psdl.Layer):
@@ -158,15 +157,15 @@ def _get_group_folder_settings(layer:psdl.Layer):
 
 def _get_layer_channel(layer:psdl.Layer, channel, prune=False):
     def task():
-        data = pixel_data_to_tiles(_layer_numpy(layer, channel))
+        data = layer_data.pixel_data_to_tiles(_layer_numpy(layer, channel))
         if prune:
-            data = prune_tiles(data)
+            data = layer_data.prune_tiles(data)
         return data
     return util.pool.submit(task)
 
 def _get_mask(layer:psdl.Layer):
     if layer.mask:
-        return Mask(
+        return layer_data.Mask(
             position=(layer.mask.top, layer.mask.left),
             data=_get_layer_channel(layer, 'mask'),
             visible=not layer.mask.disabled,
@@ -208,14 +207,14 @@ def _get_pixel_layer_properties(layer:psdl.Layer):
         'position': (layer.top, layer.left),
     }
 
-def _build_sublayers(psd_group) -> GroupLayer:
+def _build_sublayers(psd_group) -> layer_data.GroupLayer:
     layers = []
     for psd_sublayer in psd_group:
         args = _get_base_layer_properties(psd_sublayer)
         if psd_sublayer.is_group():
-            layers.append(GroupLayer(**(args | _get_group_layer_properties(psd_sublayer))))
+            layers.append(layer_data.GroupLayer(**(args | _get_group_layer_properties(psd_sublayer))))
         else:
-            layers.append(PixelLayer(**(args | _get_pixel_layer_properties(psd_sublayer))))
+            layers.append(layer_data.PixelLayer(**(args | _get_pixel_layer_properties(psd_sublayer))))
     return pvector(layers)
 
 def _is_pure_background(layer:psdl.Layer):
@@ -228,10 +227,10 @@ def _is_pure_background(layer:psdl.Layer):
         return color_all_eq, np.array(full_color, dtype=blendfuncs.dtype)
     return False, None
 
-def read(file_path:Path) -> Canvas:
+def read(file_path:Path) -> layer_data.Canvas:
     psd_file = psd_tools.PSDImage.open(str(file_path))
     _debug_psd(psd_file)
-    bg = BackgroundSettings(transparent=True)
+    bg = layer_data.BackgroundSettings(transparent=True)
     if len(psd_file) > 0:
         bg_layer = psd_file[0]
         if (bg_layer.name == 'Background'
@@ -240,9 +239,9 @@ def read(file_path:Path) -> Canvas:
             and psd_file.size == bg_layer.size):
             pure, full_color = _is_pure_background(bg_layer)
             if pure:
-                bg = BackgroundSettings(color=full_color)
+                bg = layer_data.BackgroundSettings(color=full_color)
                 psd_file._layers.pop(0)
-    return reify_canvas_futures(Canvas(
+    return layer_data.reify_canvas_futures(layer_data.Canvas(
         size=(psd_file.height, psd_file.width),
         top_level=_build_sublayers(psd_file),
         background=bg,
@@ -256,7 +255,7 @@ MASK_CHANNELS = (psdc.ChannelID.USER_LAYER_MASK,)
 RLE_HEADER = struct.pack('>H', psdc.Compression.RLE)
 
 class _SerializeConfig:
-    def __init__(self, canvas:Canvas, version:int, progress):
+    def __init__(self, canvas:layer_data.Canvas, version:int, progress):
         self.canvas = canvas
         self.version = version
         self.progress = progress
@@ -278,25 +277,25 @@ def _to_rle(array:np.ndarray, version):
         result.append([r.tobytes() for r in rle.encode_psd(src.reshape(src.shape[:2]), version)])
     return result
 
-def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=False, background=False):
+def _collect_layer_data(layer:layer_data.BaseLayer, config:_SerializeConfig, group_end=False, background=False):
     layer_record = io.BytesIO()
     channel_data = io.BytesIO()
 
     # Collect and compress channel planes
     planes = []
-    if isinstance(layer, PixelLayer):
+    if isinstance(layer, layer_data.PixelLayer):
         if background:
             color = blendfuncs.to_bytes(config.canvas.background.color)
             pixel_data = np.full(shape=config.canvas.size + (3,), fill_value=color, dtype=np.uint8)
             extents = (0, 0) + config.canvas.size
         else:
-            extents, pixel_data = tiles_to_pixel_data(layer)
+            extents, pixel_data = layer_data.tiles_to_pixel_data(layer)
         planes.extend(zip(_to_rle(pixel_data, config.version), COLOR_CHANNELS))
     else:
         extents = (0, 0, 0, 0)
         planes.extend(zip([[]] * 4, COLOR_CHANNELS))
     if layer.mask is not None:
-        mask_extents, pixel_data = tiles_to_pixel_data(layer.mask)
+        mask_extents, pixel_data = layer_data.tiles_to_pixel_data(layer.mask)
         planes.extend(zip(_to_rle(pixel_data, config.version), MASK_CHANNELS))
 
     # Collect channel info data
@@ -340,7 +339,7 @@ def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=Fals
     records.append(_get_pad(len(layer_name), 4))
 
     # Group start/end
-    if isinstance(layer, GroupLayer):
+    if isinstance(layer, layer_data.GroupLayer):
         if group_end:
             divider_setting = psdc.SectionDivider.BOUNDING_SECTION_DIVIDER
         else:
@@ -438,23 +437,23 @@ def _collect_layers(layer, config):
         config.progress.update()
         return res
 
-    if isinstance(layer, PixelLayer):
+    if isinstance(layer, layer_data.PixelLayer):
         yield util.pool.submit(lambda: collect_task(layer, config))
 
-    elif isinstance(layer, GroupLayer):
-        yield util.pool.submit(lambda: _collect_layer_data(GroupLayer(name='</Layer group>'), config, group_end=True))
+    elif isinstance(layer, layer_data.GroupLayer):
+        yield util.pool.submit(lambda: _collect_layer_data(layer_data.GroupLayer(name='</Layer group>'), config, group_end=True))
         for sublayer in layer:
             yield from _collect_layers(sublayer, config)
         yield util.pool.submit(lambda: collect_task(layer, config))
 
-    elif isinstance(layer, Canvas):
+    elif isinstance(layer, layer_data.Canvas):
         if not layer.background.transparent:
-           yield util.pool.submit(lambda: _collect_layer_data(PixelLayer(name='Background'), config, background=True))
+           yield util.pool.submit(lambda: _collect_layer_data(layer_data.PixelLayer(name='Background'), config, background=True))
 
         for sublayer in layer:
             yield from _collect_layers(sublayer, config)
 
-def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_callback=None):
+def write(canvas:layer_data.Canvas, composite_image:np.ndarray, file_path:Path, progress_callback=None):
     with tempfile.NamedTemporaryFile(dir=file_path.parent, prefix=file_path.name, delete=False, delete_on_close=False) as fp:
         try:
             version = 1 if file_path.suffix.lower() == '.psd' else 2

@@ -3,7 +3,6 @@ import sys
 from libc.stdint cimport *
 import numpy as np
 
-
 # Return the size of the decompressed region, or 0 if reading or writing would exceed the src or dst lengths.
 cdef inline size_t decode_rle(uint8_t[:] dst, const uint8_t[:] src) noexcept nogil:
     cdef size_t dst_length = dst.shape[0]

@@ -15,11 +15,9 @@ from PySide6.QtCore import *
 from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 import PySide6.QtAsyncio as QtAsyncio
-import psutil
 from pyqttoast import Toast, ToastPreset
 
-from . import layer_data, composite, util, blendfuncs
-from .constants import *
+from . import blendfuncs, constants, composite, layer_data, util
 from .file_io import psd, image, native
 
 @contextlib.contextmanager
@@ -196,7 +194,7 @@ async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=Non
         util.get_alpha(backdrop)[:] = blendfuncs.get_max()
 
     lock = threading.Lock()
-    tiles = list(util.generate_tiles(size, TILE_SIZE))
+    tiles = list(util.generate_tiles(size, constants.TILE_SIZE))
     progress_count = 0
     progress_total = len(tiles)
 
