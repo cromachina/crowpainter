@@ -140,3 +140,14 @@ def update_memory_tracking():
     _current_gc_stats = get_gc_object_stats()
     print_gc_object_stats(get_changed_stats(old_stats, _current_gc_stats))
     print(f'Memory usage: {memory_usage()}')
+
+class ProgressCounter:
+    def __init__(self, total, progress_callback):
+        self.count = 0
+        self.total = total
+        self.callback = progress_callback
+
+    def update(self):
+        if self.callback is not None:
+            self.count += 1
+            self.callback(self.count / self.total)

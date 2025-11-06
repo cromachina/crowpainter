@@ -2,6 +2,7 @@ from pathlib import Path
 import struct
 import io
 import tempfile
+import logging
 
 import psd_tools
 import psd_tools.constants as psdc
@@ -55,6 +56,35 @@ _from_psd_special = {
 
 _to_psd_blendmode = { v:k for k,v in _from_psd_blendmode.items() }
 _to_psd_special = { v:k for k,v in _from_psd_special.items() }
+
+def _debug_psd(psd:psd_tools.PSDImage):
+    logging.debug('PSD Image Resources:')
+    for k in psd.image_resources.keys():
+        logging.debug(f' {psdc.Resource(k).name}: {psd.image_resources.get_data(k)}')
+
+def _debug_layer(layer:psdl.Layer):
+    logging.debug(layer.name)
+    logging.debug(f' is group: {layer.is_group()}')
+    logging.debug(f' extents: {(layer.bbox[1], layer.bbox[0], layer.bbox[3], layer.bbox[2])}')
+    logging.debug(f' channels: {len(layer._channels)}')
+    logging.debug(f' opacity: {layer.opacity}')
+    logging.debug(f' blendmode: {layer.blend_mode.name}')
+    logging.debug(f' flags transparency protected: {layer._record.flags.transparency_protected}')
+    logging.debug(f' flags visible: {layer._record.flags.visible}')
+    logging.debug(f' visible: {layer.visible}')
+    if layer.locks is not None:
+        if layer.locks.transparency: logging.debug(' lock alpha')
+        if layer.locks.composite: logging.debug(' lock draw')
+        if layer.locks.position: logging.debug(' lock move')
+        if layer.locks.complete: logging.debug(' lock all')
+    if layer.clipping_layer: logging.debug(' is clipping')
+    if layer.has_mask(): logging.debug(' has mask')
+    logging.debug(' records:')
+    for key in layer._record.tagged_blocks.keys():
+        data = layer._record.tagged_blocks.get_data(key)
+        if key == psdc.Tag.SECTION_DIVIDER_SETTING:
+            data = data.kind.name
+        logging.debug(f'  {key.name}: {data}')
 
 def _channel_matches(layer, channel, info):
     if channel == 'color':
@@ -145,32 +175,8 @@ def _get_mask(layer:psdl.Layer):
     else:
         return None
 
-def debug_layer(layer:psdl.Layer):
-    print(layer.name)
-    print(' is group:', layer.is_group())
-    print(' extents:', (layer.bbox[1], layer.bbox[0], layer.bbox[3], layer.bbox[2]))
-    print(' channels:', len(layer._channels))
-    print(' opacity:', layer.opacity)
-    print(' blendmode:', layer.blend_mode.name)
-    print(' flags transparency protected:', layer._record.flags.transparency_protected)
-    print(' flags visible:', layer._record.flags.visible)
-    print(' visible:', layer.visible)
-    if layer.locks is not None:
-        if layer.locks.transparency: print(' lock alpha')
-        if layer.locks.composite: print(' lock draw')
-        if layer.locks.position: print(' lock move')
-        if layer.locks.complete: print(' lock all')
-    if layer.clipping_layer: print(' is clipping')
-    if layer.has_mask(): print(' has mask')
-    print(' records:')
-    for key in layer._record.tagged_blocks.keys():
-        data = layer._record.tagged_blocks.get_data(key)
-        if key == psdc.Tag.SECTION_DIVIDER_SETTING:
-            data = data.kind.name
-        print(f'  {key.name}:', data)
-
 def _get_base_layer_properties(layer:psdl.Layer):
-    #debug_layer(layer)
+    _debug_layer(layer)
     opacity, blend_mode = _get_sai_special_mode_opacity(layer)
     props = {
         'name': layer.name,
@@ -222,19 +228,9 @@ def _is_pure_background(layer:psdl.Layer):
         return color_all_eq, np.array(full_color, dtype=blendfuncs.dtype)
     return False, None
 
-def debug_psd(psd:psd_tools.PSDImage):
-    # for k in psd_file.image_resources.keys():
-    #     print(psdc.Resource(k).name)
-    #     print(psd_file.image_resources.get_data(k))
-    for record, channels in psd._record._iter_layers():
-        blocks = record.tagged_blocks
-        divider = blocks.get_data(psdc.Tag.SECTION_DIVIDER_SETTING, None)
-        divider = blocks.get_data(psdc.Tag.NESTED_SECTION_DIVIDER_SETTING, divider)
-        divider = '' if divider is None else divider.kind.name
-        print(record.name, divider)
-
 def read(file_path:Path) -> Canvas:
     psd_file = psd_tools.PSDImage.open(str(file_path))
+    _debug_psd(psd_file)
     bg = BackgroundSettings(transparent=True)
     if len(psd_file) > 0:
         bg_layer = psd_file[0]
@@ -260,18 +256,10 @@ MASK_CHANNELS = (psdc.ChannelID.USER_LAYER_MASK,)
 RLE_HEADER = struct.pack('>H', psdc.Compression.RLE)
 
 class _SerializeConfig:
-    def __init__(self, canvas:Canvas, version:int, progress_callback):
+    def __init__(self, canvas:Canvas, version:int, progress):
         self.canvas = canvas
         self.version = version
-        self.layer_data = []
-        self.current_count = 0
-        self.progress_count = canvas.count_layers()
-        self.progress_callback = progress_callback
-
-    def progress_update(self):
-        if self.progress_callback is not None:
-            self.current_count += 1
-            self.progress_callback(self.current_count / self.progress_count)
+        self.progress = progress
 
     def vselect(self, v1, v2):
         return v1 if self.version == 1 else v2
@@ -293,18 +281,16 @@ def _to_rle(array:np.ndarray, version):
 def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=False, background=False):
     layer_record = io.BytesIO()
     channel_data = io.BytesIO()
-    config.layer_data.append((layer_record, channel_data))
 
     # Collect and compress channel planes
     planes = []
     if isinstance(layer, PixelLayer):
         if background:
-            color = tuple(blendfuncs.to_bytes(config.canvas.background.color))# + (np.uint8(0xff),)
+            color = blendfuncs.to_bytes(config.canvas.background.color)
             pixel_data = np.full(shape=config.canvas.size + (3,), fill_value=color, dtype=np.uint8)
             extents = (0, 0) + config.canvas.size
         else:
             extents, pixel_data = tiles_to_pixel_data(layer)
-        print(layer.name, extents)
         planes.extend(zip(_to_rle(pixel_data, config.version), COLOR_CHANNELS))
     else:
         extents = (0, 0, 0, 0)
@@ -420,7 +406,7 @@ def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=Fals
         ))
         records.append(layer_unicode_name)
 
-    # Write everything to file
+    # Write everything the record stream.
     # Layer record header
     layer_record.write(struct.pack(
         '>4iH',
@@ -444,30 +430,36 @@ def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=Fals
     for record in records:
         layer_record.write(record)
 
+    return layer_record, channel_data
+
 def _collect_layers(layer, config):
+    def collect_task(*args, **kwargs):
+        res = _collect_layer_data(*args, **kwargs)
+        config.progress.update()
+        return res
+
     if isinstance(layer, PixelLayer):
-        _collect_layer_data(layer, config)
-        config.progress_update()
+        yield util.pool.submit(lambda: collect_task(layer, config))
 
     elif isinstance(layer, GroupLayer):
-        _collect_layer_data(GroupLayer(name='</Layer group>'), config, group_end=True)
+        yield util.pool.submit(lambda: _collect_layer_data(GroupLayer(name='</Layer group>'), config, group_end=True))
         for sublayer in layer:
-            _collect_layers(sublayer, config)
-        _collect_layer_data(layer, config)
-        config.progress_update()
+            yield from _collect_layers(sublayer, config)
+        yield util.pool.submit(lambda: collect_task(layer, config))
 
     elif isinstance(layer, Canvas):
         if not layer.background.transparent:
-            _collect_layer_data(PixelLayer(name='Background'), config, background=True)
+           yield util.pool.submit(lambda: _collect_layer_data(PixelLayer(name='Background'), config, background=True))
 
         for sublayer in layer:
-            _collect_layers(sublayer, config)
+            yield from _collect_layers(sublayer, config)
 
 def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_callback=None):
     with tempfile.NamedTemporaryFile(dir=file_path.parent, prefix=file_path.name, delete=False, delete_on_close=False) as fp:
         try:
             version = 1 if file_path.suffix.lower() == '.psd' else 2
-            config = _SerializeConfig(canvas, version, progress_callback)
+            progress = util.ProgressCounter(canvas.count_layers() + 1, progress_callback)
+            config = _SerializeConfig(canvas, version, progress)
 
             fp.write(struct.pack('>4sH6xHIIHHII',
                 b'8BPS',
@@ -490,13 +482,16 @@ def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_ca
                 0,
             ))
 
-            _collect_layers(canvas, config)
+            futures = _collect_layers(canvas, config)
+            composite_future = util.pool.submit(lambda: _to_rle(composite_image, config.version))
+
+            layer_data = [future.result() for future in futures]
 
             layer_info_size = 0
-            for layer_record, _ in config.layer_data:
+            for layer_record, _ in layer_data:
                 layer_info_size += fp.write(layer_record.getbuffer())
 
-            for _, channel_data in config.layer_data:
+            for _, channel_data in layer_data:
                 layer_info_size += fp.write(channel_data.getbuffer())
 
             layer_info_size += fp.write(_get_pad(layer_info_size, 2))
@@ -512,16 +507,17 @@ def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_ca
                 config.vselect('>IIh', '>QQh'),
                 layer_info_size + global_layer_mask_size,
                 layer_info_size,
-                -len(config.layer_data),
+                -len(layer_data),
             ))
             fp.seek(0, io.SEEK_END)
 
             # Image data section (composite image)
-            planes = _to_rle(composite_image, config.version)
+            planes = composite_future.result()
             fp.write(RLE_HEADER)
             for plane in planes:
                 for sub in plane:
                     fp.write(sub)
+            progress.update()
 
             fp.close()
             Path(fp.name).rename(file_path)
