@@ -66,8 +66,9 @@ def _debug_layer(layer:psdl.Layer):
     logging.debug(f' is group: {layer.is_group()}')
     logging.debug(f' extents: {(layer.bbox[1], layer.bbox[0], layer.bbox[3], layer.bbox[2])}')
     logging.debug(f' channels: {len(layer._channels)}')
-    logging.debug(f' opacity: {layer.opacity}')
-    logging.debug(f' constants.BlendMode: {layer.blend_mode.name}')
+    opacity, blend_mode = _get_sai_special_mode_opacity(layer)
+    logging.debug(f' opacity: {opacity}')
+    logging.debug(f' constants.BlendMode: {blend_mode.name} {layer.blend_mode}')
     logging.debug(f' flags transparency protected: {layer._record.flags.transparency_protected}')
     logging.debug(f' flags visible: {layer._record.flags.visible}')
     logging.debug(f' visible: {layer.visible}')
@@ -76,7 +77,7 @@ def _debug_layer(layer:psdl.Layer):
         if layer.locks.composite: logging.debug(' lock draw')
         if layer.locks.position: logging.debug(' lock move')
         if layer.locks.complete: logging.debug(' lock all')
-    if layer.clipping_layer: logging.debug(' is clipping')
+    if layer.clipping: logging.debug(' is clipping')
     if layer.has_mask(): logging.debug(' has mask')
     logging.debug(' records:')
     for key in layer._record.tagged_blocks.keys():
@@ -182,7 +183,7 @@ def _get_base_layer_properties(layer:psdl.Layer):
         'blend_mode': blend_mode,
         'visible': layer.visible,
         'opacity': opacity,
-        'clip': layer.clipping_layer,
+        'clip': layer.clipping,
         'mask': _get_mask(layer),
         'id': layer.layer_id,
     }
@@ -321,7 +322,7 @@ def _collect_layer_data(layer:layer_data.BaseLayer, config:_SerializeConfig, gro
         records.append(struct.pack('>I', 0))
     else:
         records.append(struct.pack(
-            '>I4iBB2x',
+            '>I4iBBxx',
             20, # Length
             *mask_extents,
             blendfuncs.to_bytes(layer.mask.background_color),
@@ -345,11 +346,13 @@ def _collect_layer_data(layer:layer_data.BaseLayer, config:_SerializeConfig, gro
         else:
             divider_setting = psdc.SectionDivider.OPEN_FOLDER if layer.folder_open else psdc.SectionDivider.CLOSED_FOLDER
         records.append(struct.pack(
-            '>4s4sII',
+            '>4s4sII4s4s',
             SIGNATURE,
             psdc.Tag.SECTION_DIVIDER_SETTING,
-            4,
-            divider_setting
+            12,
+            divider_setting,
+            SIGNATURE, # Makes psd-tools happy
+            blend_mode
         ))
 
     if not group_end:
@@ -493,7 +496,7 @@ def write(canvas:layer_data.Canvas, composite_image:np.ndarray, file_path:Path, 
             for _, channel_data in layer_data:
                 layer_info_size += fp.write(channel_data.getbuffer())
 
-            layer_info_size += fp.write(_get_pad(layer_info_size, 2))
+            layer_info_size += fp.write(_get_pad(layer_info_size, 8))
 
             # Global layer mask info.
             global_layer_mask_size = fp.write(struct.pack('>I', 0))

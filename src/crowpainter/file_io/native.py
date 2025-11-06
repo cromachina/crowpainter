@@ -40,7 +40,7 @@ def count_tiles(layers):
     return count
 
 class _SerializeConfig:
-    def __init__(self, zip_file:zipfile.ZipFile, progress_count:int, progress) -> None:
+    def __init__(self, zip_file:zipfile.ZipFile, progress) -> None:
         self.zip_file = zip_file
         self.progress = progress
         self.id_gen = _id_generator()
