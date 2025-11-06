@@ -84,10 +84,12 @@ class BaseLayer(SelectableObject):
 class PixelLayer(BaseLayer):
     position:IVec2 = field(initial=(0, 0))
     data:PMap[IVec2, PixelTile] = field(initial=pmap())
-    channels:int = 4
 
     def get_pixel_data(self, target_color_buffer:np.ndarray, target_offset:IVec2):
         return get_overlap_regions(self.data, self.position, target_color_buffer, target_offset)
+
+    def count_layers(self):
+        return 1
 
     def thaw(self):
         return self.set(color=thaw(self.data), alpha=thaw(self.data))
@@ -101,6 +103,9 @@ class GroupLayer(BaseLayer):
 
     def __reversed__(self):
         return reversed(self.layers)
+
+    def count_layers(self):
+        return sum(layer.count_layers() for layer in self)
 
     def thaw(self):
         return self.set(layers=[layer.thaw() for layer in self.layers])
@@ -116,6 +121,15 @@ class Canvas(PClass):
     top_level:PVector[BaseLayer] = field(initial=pvector())
     selection:Mask | None = field(initial=None)
     background:BackgroundSettings = field(initial=BackgroundSettings())
+
+    def __iter__(self):
+        return iter(self.top_level)
+
+    def __reversed__(self):
+        return reversed(self.layers)
+
+    def count_layers(self):
+        return sum(layer.count_layers() for layer in self)
 
     def thaw(self):
         return self.set(
@@ -144,22 +158,30 @@ def get_overlap_regions(tiles:PMap[IVec2, Tile], tiles_offset:IVec2, target_buff
     return regions
 
 def tiles_to_pixel_data(layer:PixelLayer | Mask) -> tuple[IVec2, np.ndarray]:
-    tl = np.array([0, 0])
-    br = np.array([0, 0])
-    for offset, tile in layer.data:
-        offset = np.array(offset) * (TILE_SIZE + np.array(layer.position))
+    if not layer.data:
+        return (0, 0, 0, 0), np.empty((0,), dtype=np.uint8)
+    tl = None
+    br = None
+    for offset, tile in layer.data.items():
+        offset = (np.array(offset) * TILE_SIZE) + np.array(layer.position)
         off_size = np.array(tile.get_size()) + offset
-        tl = np.minimum(tl, offset)
-        br = np.maximum(br, off_size)
+        if tl is None:
+            tl = offset
+            br = off_size
+        else:
+            tl = np.minimum(tl, offset)
+            br = np.maximum(br, off_size)
     size = np.abs(br - tl)
     if isinstance(layer, PixelLayer):
         fill_value = 0
+        channels = 4
     else:
-        fill_value = blendfuncs.tobytes(layer.background_color)
-    data = np.full_like(shape=tuple(size) + (layer.channels,), fill_value=fill_value, dtype=np.uint8)
-    for offset, tile in layer.data:
-        offset = np.array(offset) * (TILE_SIZE + np.array(layer.position))
-        util.blit(data, blendfuncs.tobytes(tile), offset)
+        fill_value = blendfuncs.to_bytes(layer.background_color)
+        channels = 1
+    data = np.full(shape=tuple(size) + (channels,), fill_value=fill_value, dtype=np.uint8)
+    for offset, tile in layer.data.items():
+        offset = (np.array(offset) * TILE_SIZE) + np.array(layer.position)
+        util.blit(data, blendfuncs.to_bytes(tile.data), offset)
     extents = (tl[0], tl[1], br[0], br[1])
     return extents, data
 

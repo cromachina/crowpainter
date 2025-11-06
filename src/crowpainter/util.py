@@ -72,6 +72,13 @@ def blit(dst, src, offset):
 def bit(number, bit):
     return bool(number & (1 << bit))
 
+def set_bits(bit_values):
+    number = 0
+    for bit, value in bit_values:
+        b = 1 if value else 0
+        number |= (b << bit)
+    return number
+
 def get_color(arr:np.ndarray):
     return arr[:,:,:3]
 

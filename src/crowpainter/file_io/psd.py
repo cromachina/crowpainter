@@ -1,6 +1,7 @@
 from pathlib import Path
 import struct
 import io
+import tempfile
 
 import psd_tools
 import psd_tools.constants as psdc
@@ -104,7 +105,7 @@ def _layer_numpy(layer:psdl.Layer, channel_name=None):
     else:
         width, height = layer.width, layer.height
 
-    decoded = [blendfuncs.parse_array(rle.decode_counts(channel.data, width, height, depth, version), depth) for channel in channels]
+    decoded = [blendfuncs.parse_array(rle.decode_psd(channel.data, width, height, depth, version), depth) for channel in channels]
     if is_color and not has_alpha:
         decoded.append(np.full_like(decoded[0], blendfuncs.get_max()))
 
@@ -119,12 +120,6 @@ def _get_sai_special_mode_opacity(layer:psdl.Layer):
     else:
         opacity, blend_mode = layer.opacity, _from_psd_blendmode.get(layer.blend_mode, BlendMode.NORMAL)
     return blendfuncs.from_bytes(np.uint8(opacity)), blend_mode
-
-def _get_protection_settings(layer:psdl.Layer):
-    blocks = layer.tagged_blocks
-    lspf = blocks.get(psdc.Tag.PROTECTED_SETTING, None)
-    data = lspf.data if lspf else 0
-    return tuple((util.bit(data, bit) for bit in [0, 1, 2, 32]))
 
 def _get_group_folder_settings(layer:psdl.Layer):
     blocks = layer.tagged_blocks
@@ -150,22 +145,47 @@ def _get_mask(layer:psdl.Layer):
     else:
         return None
 
+def debug_layer(layer:psdl.Layer):
+    print(layer.name)
+    print(' is group:', layer.is_group())
+    print(' extents:', (layer.bbox[1], layer.bbox[0], layer.bbox[3], layer.bbox[2]))
+    print(' channels:', len(layer._channels))
+    print(' opacity:', layer.opacity)
+    print(' blendmode:', layer.blend_mode.name)
+    if layer.locks is not None:
+        if layer.locks.transparency: print(' lock alpha')
+        if layer.locks.composite: print(' lock draw')
+        if layer.locks.position: print(' lock move')
+        if layer.locks.complete: print(' lock all')
+    if layer.clipping_layer: print(' is clipping')
+    if layer.has_mask(): print(' has mask')
+    print(' records:')
+    for key in layer._record.tagged_blocks.keys():
+        data = layer._record.tagged_blocks.get_data(key)
+        if key == psdc.Tag.SECTION_DIVIDER_SETTING:
+            data = data.kind.name
+        print(f'  {key.name}:', data)
+
 def _get_base_layer_properties(layer:psdl.Layer):
+    debug_layer(layer)
     opacity, blend_mode = _get_sai_special_mode_opacity(layer)
-    lock_alpha, lock_draw, lock_move, lock_all = _get_protection_settings(layer)
-    return {
+    props = {
         'name': layer.name,
         'blend_mode': blend_mode,
         'visible': layer.visible,
         'opacity': opacity,
-        'lock_alpha': lock_alpha,
-        'lock_draw': lock_draw,
-        'lock_move': lock_move,
-        'lock_all': lock_all,
         'clip': layer.clipping_layer,
         'mask': _get_mask(layer),
         'id': layer.layer_id,
     }
+    if layer.locks is not None:
+        props |= {
+            'lock_alpha': layer.locks.transparency,
+            'lock_draw': layer.locks.composite,
+            'lock_move': layer.locks.position,
+            'lock_all': layer.locks.composite,
+        }
+    return props
 
 def _get_group_layer_properties(layer:psdl.Layer):
     return {
@@ -199,8 +219,20 @@ def _is_pure_background(layer:psdl.Layer):
         return color_all_eq, np.array(full_color, dtype=blendfuncs.dtype)
     return False, None
 
+def debug_psd(psd:psd_tools.PSDImage):
+    # for k in psd_file.image_resources.keys():
+    #     print(psdc.Resource(k).name)
+    #     print(psd_file.image_resources.get_data(k))
+    for record, channels in psd._record._iter_layers():
+        blocks = record.tagged_blocks
+        divider = blocks.get_data(psdc.Tag.SECTION_DIVIDER_SETTING, None)
+        divider = blocks.get_data(psdc.Tag.NESTED_SECTION_DIVIDER_SETTING, divider)
+        divider = '' if divider is None else divider.kind.name
+        print(record.name, divider)
+
 def read(file_path:Path) -> Canvas:
     psd_file = psd_tools.PSDImage.open(str(file_path))
+    debug_psd(psd_file)
     bg = BackgroundSettings(transparent=True)
     if len(psd_file) > 0:
         bg_layer = psd_file[0]
@@ -218,40 +250,272 @@ def read(file_path:Path) -> Canvas:
         background=bg,
     ))
 
-class RLEData:
-    def __init__(self, layer:PixelLayer, channel):
-        self.counts = np.empty()
-        self.rows = np.array()
+BIT_DEPTH = 8
+CHANNELS = 4
+SIGNATURE = b'8BIM'
+COLOR_CHANNELS = (psdc.ChannelID.CHANNEL_0, psdc.ChannelID.CHANNEL_1, psdc.ChannelID.CHANNEL_2, psdc.ChannelID.TRANSPARENCY_MASK)
+MASK_CHANNELS = (psdc.ChannelID.USER_LAYER_MASK,)
+RLE_HEADER = struct.pack('>H', psdc.Compression.RLE)
 
-class PackPixelLayer:
-    def __init__(self, layer:PixelLayer):
-        self.layer = layer
+class _SerializeConfig:
+    def __init__(self, version, progress_count:int, progress_callback):
+        self.version = version
+        self.layer_data = []
+        self.current_count = 0
+        self.progress_count = progress_count
+        self.progress_callback = progress_callback
 
-def _write_header(canvas:Canvas, fp):
-    fp.write(struct.pack('>4sH6xHIIHHI', b'8BPS', 1, 4, canvas.size[1], canvas.size[0], 8, 3, 0))
+    def progress_update(self):
+        if self.progress_callback is not None:
+            self.current_count += 1
+            self.progress_callback(self.current_count / self.progress_count)
 
-def _write_layer_record(layer:BaseLayer, fp):
-    layer_info = io.BytesIO()
-    fp.write(struct.pack('>4iH'))
-    if isinstance(layer, GroupLayer):
-        pass
+    def vselect(self, v1, v2):
+        return v1 if self.version == 1 else v2
+
+def _get_pad(size, pad):
+    mod = size % pad
+    if mod > 0:
+        return b'\0' * (pad - mod)
     else:
-        pass
+        return b''
 
-def _write_layers(canvas:Canvas, fp):
-    pass
+def _to_rle(array:np.ndarray, version):
+    result = []
+    for channel in range(array.shape[2]):
+        src = array[:,:,channel]
+        result.append([r.tobytes() for r in rle.encode_psd(src.reshape(src.shape[:2]), version)])
+    return result
 
-def _write_layer_data(canvas:Canvas, fp):
-    pass
+def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=False):
+    layer_record = io.BytesIO()
+    channel_data = io.BytesIO()
+    config.layer_data.append((layer_record, channel_data))
 
-def _compress_layer_data(layer):
-    pass
+    # Collect and compress channel planes
+    planes = []
+    if isinstance(layer, PixelLayer):
+        extents, pixel_data = tiles_to_pixel_data(layer)
+        print(layer.name, extents)
+        planes.extend(zip(_to_rle(pixel_data, config.version), COLOR_CHANNELS))
+    else:
+        extents = (0, 0, 0, 0)
+        planes.extend(zip([[]] * 4, COLOR_CHANNELS))
+    if layer.mask is not None:
+        mask_extents, pixel_data = tiles_to_pixel_data(layer.mask)
+        planes.extend(zip(_to_rle(pixel_data, config.version), MASK_CHANNELS))
 
-# TODO: psd-tools says it doesn't support adding layers to a PSD
-# but I think I can hack it to make it work, which would probably
-# save a lot of pain trying to write a PSD exporter from scratch.
-def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path):
-    with open(file_path, 'wb') as fp:
-        _write_header(canvas, fp)
-        _write_layers(canvas, fp)
-        _write_layer_data(canvas, fp)
+    # Collect channel info data
+    channel_info = []
+    for data, channel_id in planes:
+        sub_size = 0
+        for sub in [RLE_HEADER] + data:
+            sub_size += channel_data.write(sub)
+        channel_info.append(struct.pack(config.vselect('>hI', '>hQ'), channel_id, sub_size))
+
+    # Get blend mode
+    if layer.blend_mode in _to_psd_special:
+        special_mode = True
+        blend_mode = _to_psd_special.get(layer.blend_mode)
+    else:
+        special_mode = False
+        blend_mode = _to_psd_blendmode.get(layer.blend_mode)
+
+    records = []
+
+    # Mask record
+    if layer.mask is None:
+        records.append(struct.pack('>I', 0))
+    else:
+        records.append(struct.pack(
+            '>I4iBB2x',
+            20, # Length
+            *mask_extents,
+            blendfuncs.to_bytes(layer.mask.background_color),
+            util.set_bits([
+                (1, layer.mask.visible)
+            ])
+        ))
+
+    # Blending ranges record
+    records.append(struct.pack('>I', 0))
+
+    # Name record
+    layer_name = struct.pack('>p', layer.name.encode('macroman', 'replace'))
+    records.append(layer_name)
+    records.append(_get_pad(len(layer_name), 4))
+
+    # Group start/end
+    if isinstance(layer, GroupLayer):
+        if group_end:
+            divider_setting = psdc.SectionDivider.BOUNDING_SECTION_DIVIDER
+        else:
+            divider_setting = psdc.SectionDivider.OPEN_FOLDER if layer.folder_open else psdc.SectionDivider.CLOSED_FOLDER
+        records.append(struct.pack(
+            '>4s4sII',
+            SIGNATURE,
+            psdc.Tag.SECTION_DIVIDER_SETTING,
+            4,
+            divider_setting
+        ))
+
+    if not group_end:
+        # Protection flags
+        records.append(struct.pack(
+            '>4s4sII',
+            SIGNATURE,
+            psdc.Tag.PROTECTED_SETTING,
+            4,
+            util.set_bits([
+                (0, layer.lock_alpha),
+                (1, layer.lock_draw),
+                (2, layer.lock_move),
+                (32, layer.lock_all),
+            ])
+        ))
+
+        # Layer ID
+        records.append(struct.pack(
+            '>4s4sII',
+            SIGNATURE,
+            psdc.Tag.LAYER_ID,
+            4,
+            layer.id
+        ))
+
+        # SAI special mode
+        if special_mode:
+            records.append(struct.pack(
+                '>4s4sIB3x',
+                SIGNATURE,
+                psdc.Tag.TRANSPARENCY_SHAPES_LAYER,
+                4,
+                0,
+            ))
+
+            records.append(struct.pack(
+                '>4s4sIB3x',
+                SIGNATURE,
+                psdc.Tag.BLEND_FILL_OPACITY,
+                4,
+                blendfuncs.to_bytes(layer.opacity)
+            ))
+
+        # Unicode layer name
+        layer_unicode_name = layer.name.encode('utf-16-be') + b'\0\0'
+        records.append(struct.pack(
+            '>4s4sII',
+            SIGNATURE,
+            psdc.Tag.UNICODE_LAYER_NAME,
+            4 + len(layer_unicode_name),
+            len(layer.name),
+        ))
+        records.append(layer_unicode_name)
+
+    # Write everything to file
+    # Layer record header
+    layer_record.write(struct.pack(
+        '>4iH',
+        *extents,
+        len(channel_info)
+    ))
+    for info in channel_info:
+        layer_record.write(info)
+    layer_record.write(struct.pack(
+        '>4s4sBBBxI',
+        SIGNATURE,
+        blend_mode,
+        255 if special_mode else blendfuncs.to_bytes(layer.opacity),
+        psdc.Clipping.NON_BASE if layer.clip else psdc.Clipping.BASE,
+        util.set_bits([
+            (0, layer.lock_alpha),
+            (1, layer.visible)
+        ]),
+        sum(len(record) for record in records)
+    ))
+    for record in records:
+        layer_record.write(record)
+
+def _collect_layers(layer, config):
+    if isinstance(layer, PixelLayer):
+        _collect_layer_data(layer, config)
+        config.progress_update()
+
+    elif isinstance(layer, GroupLayer):
+        _collect_layer_data(GroupLayer(name='</Layer group>'), config, group_end=True)
+        for sublayer in layer:
+            _collect_layers(sublayer, config)
+        _collect_layer_data(layer, config)
+        config.progress_update()
+
+    elif isinstance(layer, Canvas):
+        #TODO background layer
+        for sublayer in layer:
+            _collect_layers(sublayer, config)
+
+def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_callback=None):
+    with tempfile.NamedTemporaryFile(dir=file_path.parent, prefix=file_path.name, delete=False, delete_on_close=False) as fp:
+        try:
+            version = 1 if file_path.suffix.lower() == '.psd' else 2
+            config = _SerializeConfig(version, canvas.count_layers(), progress_callback)
+
+            fp.write(struct.pack('>4sH6xHIIHHII',
+                b'8BPS',
+                config.version,
+                CHANNELS,
+                canvas.size[0],
+                canvas.size[1],
+                BIT_DEPTH,
+                psdc.ColorMode.RGB,
+                0, # Color mode section size
+                0, # Image resources section size
+            ))
+
+            # Placeholder layer and mask info header
+            layer_info_pos = fp.tell()
+            fp.write(struct.pack(
+                config.vselect('>IIh', '>QQh'),
+                0,
+                0,
+                0,
+            ))
+
+            _collect_layers(canvas, config)
+
+            layer_info_size = 0
+            for layer_record, _ in config.layer_data:
+                layer_info_size += fp.write(layer_record.getbuffer())
+
+            for _, channel_data in config.layer_data:
+                layer_info_size += fp.write(channel_data.getbuffer())
+
+            layer_info_size += fp.write(_get_pad(layer_info_size, 4))
+
+            # Global layer mask info.
+            global_layer_mask_size = fp.write(struct.pack('>I', 0))
+
+            # Global tagged blocks (empty)
+
+            # Rewrite layer and mask info header now that we know sizes
+            fp.seek(layer_info_pos, io.SEEK_SET)
+            fp.write(struct.pack(
+                config.vselect('>IIh', '>QQh'),
+                layer_info_size + global_layer_mask_size,
+                layer_info_size,
+                -len(config.layer_data),
+            ))
+            fp.seek(0, io.SEEK_END)
+
+            # Image data section (composite image)
+            planes = _to_rle(composite_image, config.version)
+            fp.write(RLE_HEADER)
+            for plane in planes:
+                for sub in plane:
+                    fp.write(sub)
+
+            fp.close()
+            Path(fp.name).rename(file_path)
+        except Exception as ex:
+            fp.close()
+            Path(fp.name).unlink(True)
+            raise ex

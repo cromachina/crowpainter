@@ -23,7 +23,7 @@ cdef short gamma_b = <short>(rangemax * 0.11)
 cdef short[::1] sqrt_lut = (np.sqrt(np.arange(0, rangemax + 1, dtype=np.float32) / rangemax) * rangemax).astype(np.int16)
 
 def get_max():
-    return rangemax
+    return dtype(rangemax)
 
 @cython.ufunc
 cdef short from_bytes(unsigned char val) noexcept nogil:

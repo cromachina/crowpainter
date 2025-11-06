@@ -185,10 +185,7 @@ def matrix_to_QTransform(matrix:np.ndarray) -> QTransform:
     t = QTransform().setMatrix(m[0,0], m[0,1], m[0,2], m[1,0], m[1,1], m[1,2], m[2,0], m[2,1], m[2,2])
     return t
 
-def do_nothing(*args, **kwargs):
-    pass
-
-async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=None, offset:layer_data.IVec2=(0, 0), progress_callback=do_nothing):
+async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=None, offset:layer_data.IVec2=(0, 0), progress_callback=None):
     if size is None:
         size = canvas.size
     if canvas.background.transparent:
@@ -207,9 +204,10 @@ async def parallel_composite(canvas:layer_data.Canvas, size:layer_data.IVec2=Non
         nonlocal progress_count
         tile = util.get_overlap_view(backdrop, size, offset)
         composite.composite(canvas.top_level, offset, tile)
-        with lock:
-            progress_count += 1
-            progress_callback(progress_count / progress_total)
+        if progress_callback:
+            with lock:
+                progress_count += 1
+                progress_callback(progress_count / progress_total)
 
     tasks = []
     for (tile_size, tile_offset) in tiles:
@@ -709,11 +707,13 @@ class MainWindow(QMainWindow):
 
     def save(self, canvas:layer_data.Canvas, composite:np.ndarray, file_path, progress_callback):
         file_path = Path(file_path)
-        file_type = file_path.suffix
+        file_type = file_path.suffix.lower()
         if file_type == '.crow':
             native.write(canvas, composite, file_path, progress_callback)
         if file_type in ['.webp', '.png']:
             image.write(composite, file_path, [])
+        if file_type in ['.psd', '.psb']:
+            psd.write(canvas, composite, file_path, progress_callback)
         return True
 
     def create_menu_action(self, menu:QMenu, text:str, callback, enabled=True):

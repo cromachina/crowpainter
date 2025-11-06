@@ -41,7 +41,7 @@ def count_tiles(layers):
             count += len(layer.mask.data)
     return count
 
-class _SerializeConfig():
+class _SerializeConfig:
     def __init__(self, zip_file:zipfile.ZipFile, progress_count:int, progress_callback) -> None:
         self.zip_file = zip_file
         self.current_count = 0

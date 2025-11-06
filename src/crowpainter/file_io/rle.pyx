@@ -1,8 +1,8 @@
 #cython: language_level=3, boundscheck=False, wraparound=False
 import sys
-from libc.string cimport memcpy, memset
 from libc.stdint cimport *
 import numpy as np
+
 
 # Return the size of the decompressed region, or 0 if reading or writing would exceed the src or dst lengths.
 cdef inline size_t decode_rle(uint8_t[:] dst, const uint8_t[:] src) noexcept nogil:
@@ -62,7 +62,7 @@ cdef inline bint finish_rle(uint8_t[:] dst, const uint8_t[:] src, size_t* pdst_i
 
 # Returns the size of the compressed region, or 0 to indicate the pathological case where
 # there are too many RAWs and the region would grow instead.
-cdef size_t encode_rle(uint8_t[:] dst, const uint8_t[:] src) noexcept nogil:
+cdef inline size_t encode_rle(uint8_t[:] dst, const uint8_t[:] src) noexcept nogil:
     cdef size_t dst_length = dst.shape[0]
     cdef size_t src_length = src.shape[0]
     cdef size_t src_i = 0
@@ -109,8 +109,7 @@ cdef void decode_rle_counts(uint8_t[:,:] dst, const uint32_t[:] src_row_sizes, c
     cdef uint32_t src_row_offset = 0, src_row_length
     cdef const uint8_t[:] src_row
     cdef uint8_t[:] dst_row
-    cdef int i
-
+    cdef Py_ssize_t i
     for i in range(src_row_sizes.shape[0]):
         src_row_length = src_row_sizes[i]
         src_row = src[src_row_offset:src_row_offset + src_row_length]
@@ -118,8 +117,19 @@ cdef void decode_rle_counts(uint8_t[:,:] dst, const uint32_t[:] src_row_sizes, c
         dst_row = dst[i]
         decode_rle(dst_row, src_row)
 
-cdef void encode_rle_counts(uint8_t[:] dst, uint32_t[:] dst_row_sizes, const uint8_t[:,:]src) noexcept nogil:
-    pass
+# Returns final resulting length of dst
+cdef uint32_t encode_rle_counts(uint32_t[:] dst_row_sizes, uint8_t[:] dst, const uint8_t[:,:] src) noexcept nogil:
+    cdef uint32_t dst_row_offset = 0, dst_row_size
+    cdef const uint8_t[:] src_row
+    cdef uint8_t[:] dst_row
+    cdef Py_ssize_t i
+    for i in range(src.shape[0]):
+        dst_row = dst[dst_row_offset:]
+        src_row = src[i]
+        dst_row_size = encode_rle(dst_row, src_row)
+        dst_row_sizes[i] = dst_row_size
+        dst_row_offset += dst_row_size
+    return dst_row_offset
 
 def decode(dst:np.ndarray, src:np.ndarray):
     return decode_rle(dst, src)
@@ -127,16 +137,25 @@ def decode(dst:np.ndarray, src:np.ndarray):
 def encode(dst:np.ndarray, src:np.ndarray):
     return encode_rle(dst, src)
 
-def decode_counts(data, width, height, depth, version):
+def decode_psd(src, width, height, depth, version):
     row_size = max(width * depth // 8, 1)
     dtype = (np.uint16, np.uint32)[version - 1]
-    counts = np.frombuffer(data, dtype=dtype, count=height).copy()
+    src_row_sizes = np.frombuffer(src, dtype=dtype, count=height).copy()
     if sys.byteorder == 'little':
-        counts.byteswap(inplace=True)
-    rows = np.frombuffer(data, dtype=np.uint8, offset=counts.nbytes)
-    result = np.empty((height, row_size), dtype=np.uint8)
-    decode_rle_counts(result, counts.astype(np.uint32), rows)
-    return result
+        src_row_sizes.byteswap(inplace=True)
+    src_rows = np.frombuffer(src, dtype=np.uint8, offset=src_row_sizes.nbytes)
+    dst = np.empty((height, row_size), dtype=np.uint8)
+    decode_rle_counts(dst, src_row_sizes.astype(np.uint32), src_rows)
+    return dst
 
-def encode_counts():
-    pass
+def encode_psd(src:np.ndarray, version):
+    worst_case_width = int(np.ceil(src.shape[1] / 128)) + src.shape[1]
+    dst_row_sizes = np.empty(shape=(src.shape[0],), dtype=np.uint32)
+    dst = np.empty(shape=(src.shape[0] * worst_case_width,), dtype=np.uint8)
+    final_size = encode_rle_counts(dst_row_sizes, dst, src)
+    dst = dst[:final_size]
+    dtype = (np.uint16, np.uint32)[version - 1]
+    dst_row_sizes = dst_row_sizes.astype(dtype)
+    if sys.byteorder == 'little':
+        dst_row_sizes.byteswap(inplace=True)
+    return dst_row_sizes, dst

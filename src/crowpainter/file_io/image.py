@@ -15,17 +15,16 @@ def read(file_path:Path) -> Canvas:
     else:
         data = cv2.cvtColor(data, cv2.COLOR_BGRA2RGBA)
         bg = BackgroundSettings(transparent=True)
-    data = blendfuncs.from_bytes(data)
-    tiles = pixel_data_to_tiles(data)
+    tiles = pixel_data_to_tiles(blendfuncs.from_bytes(data))
     layer = PixelLayer(
         name="Layer1",
-        color=tiles,
+        data=tiles,
     )
     return Canvas(
         top_level=GroupLayer(layers=pvector([layer])),
         size=data.shape[:2],
         background=bg,
-    )
+    ), data
 
 def is_grayscale(image):
     r, g, b = image[:,:,0], image[:,:,1], image[:,:,2]
