@@ -152,6 +152,9 @@ def debug_layer(layer:psdl.Layer):
     print(' channels:', len(layer._channels))
     print(' opacity:', layer.opacity)
     print(' blendmode:', layer.blend_mode.name)
+    print(' flags transparency protected:', layer._record.flags.transparency_protected)
+    print(' flags visible:', layer._record.flags.visible)
+    print(' visible:', layer.visible)
     if layer.locks is not None:
         if layer.locks.transparency: print(' lock alpha')
         if layer.locks.composite: print(' lock draw')
@@ -333,7 +336,7 @@ def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=Fals
             *mask_extents,
             blendfuncs.to_bytes(layer.mask.background_color),
             util.set_bits([
-                (1, layer.mask.visible)
+                (1, not layer.mask.visible)
             ])
         ))
 
@@ -429,7 +432,7 @@ def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=Fals
         psdc.Clipping.NON_BASE if layer.clip else psdc.Clipping.BASE,
         util.set_bits([
             (0, layer.lock_alpha),
-            (1, layer.visible)
+            (1, not layer.visible),
         ]),
         sum(len(record) for record in records)
     ))
