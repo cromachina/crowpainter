@@ -30,7 +30,7 @@ def timeit(message):
     finally:
         logging.info(f'{message}: {time.monotonic() - start}')
 
-class ExtendedInfoMessage(QDialog):
+class ExtendedInfoDialog(QDialog):
     def __init__(self, parent=None, title='', text=''):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -38,7 +38,7 @@ class ExtendedInfoMessage(QDialog):
         message = QPlainTextEdit()
         message.setPlainText(text)
         message.setReadOnly(True)
-        copy_button = QPushButton(text='Copy text')
+        copy_button = QPushButton(text='Copy to clipboard')
         copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(text))
         close_button = QDialogButtonBox(QDialogButtonBox.Close)
         close_button.accepted.connect(self.accept)
@@ -61,8 +61,8 @@ def dispatch_to_main_thread(callback):
     timer.timeout.connect(wrapper)
     QMetaObject.invokeMethod(timer, 'start', Q_ARG(int, 0))
 
-def error_toast(text):
-    toast = Toast()
+def error_toast(parent, text):
+    toast = Toast(parent=parent)
     toast.setDuration(5000)
     toast.setText(text)
     toast.applyPreset(ToastPreset.ERROR_DARK)
@@ -70,11 +70,11 @@ def error_toast(text):
     toast.setFadeOutDuration(0)
     toast.show()
 
-def show_error_toast(text):
-    dispatch_to_main_thread(lambda: error_toast(text))
+def show_error_toast(parent, text):
+    dispatch_to_main_thread(lambda: error_toast(parent, text))
 
-def show_error_message(text):
-    dispatch_to_main_thread(lambda: ExtendedInfoMessage(title='Error', text=text).exec())
+def show_error_dialog(parent, text):
+    dispatch_to_main_thread(lambda: ExtendedInfoDialog(parent=parent, title='Error', text=text).exec())
 
 class CanvasState():
     def __init__(self, initial_state:layer_data.Canvas, file_path:Path):
@@ -585,46 +585,6 @@ class MainWindow(QMainWindow):
         self.create_menus()
         self.open_lock = asyncio.Lock()
 
-    def closeEvent(self, event):
-        self.settings.setValue('window/geometry', self.geometry())
-        return super().closeEvent(event)
-
-    def on_tab_close_requested(self, index):
-        widget = self.viewport_tab.widget(index)
-        widget.deleteLater()
-
-    def on_tab_selected(self, index):
-        if self.scroll_area.widget() is not None:
-            self.scroll_area.widget().deleteLater()
-        if index == -1:
-            return
-        viewport:Viewport = self.viewport_tab.widget(index)
-        canvas_state = viewport.canvas_state.get_current()
-        layer_list = LayerList(self.scroll_area, is_group=False)
-        build_layer_list(layer_list, canvas_state.top_level)
-        self.scroll_area.setWidget(layer_list)
-
-    def on_new(self):
-        pass
-
-    def on_open(self):
-        dialog = QFileDialog(self)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
-        dialog.setNameFilter(image_filter)
-        dialog.setDirectory(self.settings.value('lastdir', '.'))
-        dialog.setModal(True)
-        dialog.filesSelected.connect(lambda files: asyncio.ensure_future(self.open_files(files)))
-        dialog.show()
-
-    async def open_files(self, files):
-        for file_path in files:
-            # TODO check if file is already open and ask to reopen without saving.
-            await self.open(file_path)
-
-    def on_save(self):
-        pass
-
     @contextlib.contextmanager
     def progress_status_bar(self):
         try:
@@ -644,77 +604,6 @@ class MainWindow(QMainWindow):
         finally:
             prog.close()
             prog.deleteLater()
-
-    def on_save_as(self):
-        viewport:Viewport = self.viewport_tab.currentWidget()
-        if viewport is not None:
-            dialog = QFileDialog(self)
-            dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-            dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-            dialog.setNameFilter(image_filter)
-            dialog.setDirectory(self.settings.value('lastdir', '.', type=str))
-            dialog.setModal(True)
-            dialog.fileSelected.connect(lambda file: asyncio.ensure_future(self._save_file(file, viewport)))
-            dialog.show()
-
-    async def _save_file(self, file_path, viewport, modal=False):
-        if file_path == '':
-            return
-        current_canvas = viewport.canvas_state.get_current()
-        current_composite = viewport.composite_image.copy()
-        self.settings.setValue('lastdir', str(Path(file_path).parent))
-        if modal:
-            progress = self.progress_dialog(f'Saving {current_canvas.name}')
-        else:
-            progress = self.progress_status_bar()
-        with progress as progress_widget, timeit(f'save {file_path}'):
-            result = await util.peval(self.save, current_canvas, current_composite, file_path, progress_widget.update_value)
-        viewport.canvas_state.set_saved(current_canvas)
-
-    def on_close(self):
-        pass
-
-    async def open(self, file_path):
-        file_path = Path(file_path)
-        self.settings.setValue('lastdir', str(file_path.parent))
-        current_task = None
-        with self.progress_dialog(text=f'Opening {file_path.name}') as progress:
-            def cancel_open():
-                if current_task is not None:
-                    current_task.cancel('Open cancelled')
-            progress.rejected.connect(cancel_open)
-            try:
-                with timeit(f'open {file_path}'):
-                    with timeit(f'open file read {file_path}'):
-                        current_task = asyncio.create_task(open_file(file_path))
-                        canvas = await current_task
-                    composite_image = None
-                    if isinstance(canvas, tuple):
-                        canvas, composite_image = canvas
-                    canvas_state = CanvasState(
-                        initial_state=canvas,
-                        file_path=file_path,
-                    )
-                    if composite_image is None:
-                        with timeit(f'open composite {file_path}'):
-                            current_task = asyncio.create_task(parallel_composite(canvas, progress_callback=progress.update_value))
-                            composite_image = await current_task
-                    viewport = Viewport(canvas_state=canvas_state, initial_composite=composite_image)
-                    index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
-                    self.viewport_tab.setCurrentIndex(index)
-            except asyncio.CancelledError:
-                pass
-
-    def save(self, canvas:layer_data.Canvas, composite:np.ndarray, file_path, progress_callback):
-        file_path = Path(file_path)
-        file_type = file_path.suffix.lower()
-        if file_type == '.crow':
-            native.write(canvas, composite, file_path, progress_callback)
-        if file_type in ['.webp', '.png']:
-            image.write(composite, file_path, [])
-        if file_type in ['.psd', '.psb']:
-            psd.write(canvas, composite, file_path, progress_callback)
-        return True
 
     def create_menu_action(self, menu:QMenu, text:str, callback, enabled=True):
         action = QAction(text=text, parent=self)
@@ -753,14 +642,125 @@ class MainWindow(QMainWindow):
 
         self.action_show_layer_panel = self.create_menu_widget_toggle_action(menu_window, self.layer_panel_dock, '&Layer Panel')
 
-async def open_file(file_path:Path):
-    file_type = file_path.suffix
-    if file_type in ['.psd', '.psb']:
-        return await util.peval(psd.read, file_path)
-    elif file_type == '.crow':
-        return await util.peval(native.read, file_path)
-    else:
-        return await util.peval(image.read, file_path)
+    def closeEvent(self, event):
+        self.settings.setValue('window/geometry', self.geometry())
+        return super().closeEvent(event)
+
+    def on_tab_close_requested(self, index):
+        widget = self.viewport_tab.widget(index)
+        widget.deleteLater()
+
+    def on_close(self):
+        pass
+
+    def on_tab_selected(self, index):
+        if self.scroll_area.widget() is not None:
+            self.scroll_area.widget().deleteLater()
+        if index == -1:
+            return
+        viewport:Viewport = self.viewport_tab.widget(index)
+        canvas_state = viewport.canvas_state.get_current()
+        layer_list = LayerList(self.scroll_area, is_group=False)
+        build_layer_list(layer_list, canvas_state.top_level)
+        self.scroll_area.setWidget(layer_list)
+
+    def on_new(self):
+        pass
+
+    def on_open(self):
+        dialog = QFileDialog(self)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+        dialog.setNameFilter(image_filter)
+        dialog.setDirectory(self.settings.value('lastdir', '.'))
+        dialog.setModal(True)
+        dialog.filesSelected.connect(lambda files: asyncio.ensure_future(self.open_files(files)))
+        dialog.show()
+
+    async def open_files(self, files):
+        for file_path in files:
+            # TODO check if file is already open and ask to reopen without saving.
+            await self.open(file_path)
+
+    async def open(self, file_path):
+        file_path = Path(file_path)
+        self.settings.setValue('lastdir', str(file_path.parent))
+        current_task = None
+        with self.progress_dialog(text=f'Opening {file_path.name}') as progress:
+            def cancel_open():
+                if current_task is not None:
+                    current_task.cancel('Open cancelled')
+            progress.rejected.connect(cancel_open)
+            try:
+                with timeit(f'open {file_path}'):
+                    with timeit(f'open file read {file_path}'):
+                        current_task = asyncio.create_task(self.open_file(file_path))
+                        canvas = await current_task
+                    composite_image = None
+                    if isinstance(canvas, tuple):
+                        canvas, composite_image = canvas
+                    canvas_state = CanvasState(
+                        initial_state=canvas,
+                        file_path=file_path,
+                    )
+                    if composite_image is None:
+                        with timeit(f'open composite {file_path}'):
+                            current_task = asyncio.create_task(parallel_composite(canvas, progress_callback=progress.update_value))
+                            composite_image = await current_task
+                    viewport = Viewport(canvas_state=canvas_state, initial_composite=composite_image)
+                    index = self.viewport_tab.addTab(viewport, viewport.canvas_state.file_path.name)
+                    self.viewport_tab.setCurrentIndex(index)
+            except asyncio.CancelledError:
+                pass
+
+    async def open_file(self, file_path:Path):
+        file_type = file_path.suffix.lower()
+        if file_type in ['.psd', '.psb']:
+            return await util.peval(psd.read, file_path)
+        elif file_type == '.crow':
+            return await util.peval(native.read, file_path)
+        else:
+            return await util.peval(image.read, file_path)
+
+    def on_save(self):
+        pass
+
+    def on_save_as(self):
+        viewport:Viewport = self.viewport_tab.currentWidget()
+        if viewport is not None:
+            dialog = QFileDialog(self)
+            dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+            dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+            dialog.setNameFilter(image_filter)
+            dialog.setDirectory(self.settings.value('lastdir', '.', type=str))
+            dialog.setModal(True)
+            dialog.fileSelected.connect(lambda file: asyncio.ensure_future(self._save_file(file, viewport)))
+            dialog.show()
+
+    async def _save_file(self, file_path, viewport, modal=False):
+        if file_path == '':
+            return
+        current_canvas = viewport.canvas_state.get_current()
+        current_composite = viewport.composite_image.copy()
+        self.settings.setValue('lastdir', str(Path(file_path).parent))
+        if modal:
+            progress = self.progress_dialog(f'Saving {current_canvas.name}')
+        else:
+            progress = self.progress_status_bar()
+        with progress as progress_widget, timeit(f'save {file_path}'):
+            result = await util.peval(self.save, current_canvas, current_composite, file_path, progress_widget.update_value)
+        viewport.canvas_state.set_saved(current_canvas)
+
+    def save(self, canvas:layer_data.Canvas, composite:np.ndarray, file_path, progress_callback):
+        file_path = Path(file_path)
+        file_type = file_path.suffix.lower()
+        if file_type == '.crow':
+            native.write(canvas, composite, file_path, progress_callback)
+        if file_type in ['.webp', '.png']:
+            image.write(composite, file_path, [])
+        if file_type in ['.psd', '.psb']:
+            psd.write(canvas, composite, file_path, progress_callback)
+        return True
 
 def init_logging():
     logging.basicConfig(
@@ -768,25 +768,26 @@ def init_logging():
         level=logging.INFO
     )
 
-# Exceptions that occur in any thread, outside of the async event loop.
-def excepthook(exc_type, exc_value, exc_tb):
-    tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-    message = "".join(traceback.format_exception_only(exc_type, exc_value))
-    logging.exception(tb)
-    show_error_toast(message)
-
-# Exceptions that occur in the async event loop.
-def async_exception_handler(context):
-    tb = context.get('traceback')
-    message = repr(context.get('exception'))
-    logging.exception(tb)
-    show_error_toast(message)
-
 async def async_main():
     init_logging()
-    asyncio.get_event_loop().set_exception_handler(async_exception_handler)
     main_window = MainWindow()
     main_window.show()
+
+    # Exceptions that occur in any thread, outside of the async event loop.
+    def excepthook(exc_type, exc_value, exc_tb):
+        tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        message = "".join(traceback.format_exception_only(exc_type, exc_value))
+        logging.exception(tb)
+        show_error_toast(main_window, message)
+
+    # Exceptions that occur in the async event loop.
+    def async_exception_handler(context):
+        tb = context.get('traceback')
+        message = repr(context.get('exception'))
+        logging.exception(tb)
+        show_error_toast(main_window, message)
+
+    asyncio.get_event_loop().set_exception_handler(async_exception_handler)
     Toast.setPositionRelativeToWidget(main_window)
     sys.excepthook = excepthook
 
