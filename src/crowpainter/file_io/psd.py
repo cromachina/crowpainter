@@ -170,7 +170,7 @@ def debug_layer(layer:psdl.Layer):
         print(f'  {key.name}:', data)
 
 def _get_base_layer_properties(layer:psdl.Layer):
-    debug_layer(layer)
+    #debug_layer(layer)
     opacity, blend_mode = _get_sai_special_mode_opacity(layer)
     props = {
         'name': layer.name,
@@ -235,7 +235,6 @@ def debug_psd(psd:psd_tools.PSDImage):
 
 def read(file_path:Path) -> Canvas:
     psd_file = psd_tools.PSDImage.open(str(file_path))
-    debug_psd(psd_file)
     bg = BackgroundSettings(transparent=True)
     if len(psd_file) > 0:
         bg_layer = psd_file[0]
@@ -261,11 +260,12 @@ MASK_CHANNELS = (psdc.ChannelID.USER_LAYER_MASK,)
 RLE_HEADER = struct.pack('>H', psdc.Compression.RLE)
 
 class _SerializeConfig:
-    def __init__(self, version, progress_count:int, progress_callback):
+    def __init__(self, canvas:Canvas, version:int, progress_callback):
+        self.canvas = canvas
         self.version = version
         self.layer_data = []
         self.current_count = 0
-        self.progress_count = progress_count
+        self.progress_count = canvas.count_layers()
         self.progress_callback = progress_callback
 
     def progress_update(self):
@@ -290,7 +290,7 @@ def _to_rle(array:np.ndarray, version):
         result.append([r.tobytes() for r in rle.encode_psd(src.reshape(src.shape[:2]), version)])
     return result
 
-def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=False):
+def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=False, background=False):
     layer_record = io.BytesIO()
     channel_data = io.BytesIO()
     config.layer_data.append((layer_record, channel_data))
@@ -298,7 +298,12 @@ def _collect_layer_data(layer:BaseLayer, config:_SerializeConfig, group_end=Fals
     # Collect and compress channel planes
     planes = []
     if isinstance(layer, PixelLayer):
-        extents, pixel_data = tiles_to_pixel_data(layer)
+        if background:
+            color = tuple(blendfuncs.to_bytes(config.canvas.background.color))# + (np.uint8(0xff),)
+            pixel_data = np.full(shape=config.canvas.size + (3,), fill_value=color, dtype=np.uint8)
+            extents = (0, 0) + config.canvas.size
+        else:
+            extents, pixel_data = tiles_to_pixel_data(layer)
         print(layer.name, extents)
         planes.extend(zip(_to_rle(pixel_data, config.version), COLOR_CHANNELS))
     else:
@@ -452,7 +457,9 @@ def _collect_layers(layer, config):
         config.progress_update()
 
     elif isinstance(layer, Canvas):
-        #TODO background layer
+        if not layer.background.transparent:
+            _collect_layer_data(PixelLayer(name='Background'), config, background=True)
+
         for sublayer in layer:
             _collect_layers(sublayer, config)
 
@@ -460,7 +467,7 @@ def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_ca
     with tempfile.NamedTemporaryFile(dir=file_path.parent, prefix=file_path.name, delete=False, delete_on_close=False) as fp:
         try:
             version = 1 if file_path.suffix.lower() == '.psd' else 2
-            config = _SerializeConfig(version, canvas.count_layers(), progress_callback)
+            config = _SerializeConfig(canvas, version, progress_callback)
 
             fp.write(struct.pack('>4sH6xHIIHHII',
                 b'8BPS',
@@ -492,7 +499,7 @@ def write(canvas:Canvas, composite_image:np.ndarray, file_path:Path, progress_ca
             for _, channel_data in config.layer_data:
                 layer_info_size += fp.write(channel_data.getbuffer())
 
-            layer_info_size += fp.write(_get_pad(layer_info_size, 4))
+            layer_info_size += fp.write(_get_pad(layer_info_size, 2))
 
             # Global layer mask info.
             global_layer_mask_size = fp.write(struct.pack('>I', 0))
