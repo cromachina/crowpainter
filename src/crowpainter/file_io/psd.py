@@ -410,14 +410,15 @@ def _collect_layer_data(layer:layer_data.BaseLayer, config:_SerializeConfig, gro
 
     # Write everything the record stream.
     # Layer record header
-    layer_record.write(struct.pack(
+    size = 0
+    size += layer_record.write(struct.pack(
         '>4iH',
         *extents,
         len(channel_info)
     ))
     for info in channel_info:
-        layer_record.write(info)
-    layer_record.write(struct.pack(
+        size += layer_record.write(info)
+    size += layer_record.write(struct.pack(
         '>4s4sBBBxI',
         SIGNATURE,
         blend_mode,
@@ -430,8 +431,8 @@ def _collect_layer_data(layer:layer_data.BaseLayer, config:_SerializeConfig, gro
         sum(len(record) for record in records)
     ))
     for record in records:
-        layer_record.write(record)
-
+        size += layer_record.write(record)
+    layer_record.write(_get_pad(size, 2))
     return layer_record, channel_data
 
 def _collect_layers(layer, config):
@@ -489,36 +490,56 @@ def write(canvas:layer_data.Canvas, composite_image:np.ndarray, file_path:Path, 
 
             layer_data = [future.result() for future in futures]
 
-            layer_info_size = 0
+            layer_and_mask_info_size = config.vselect(4, 8)
+            layer_info_size = 2
+            layer_records_size = 0
             for layer_record, _ in layer_data:
-                layer_info_size += fp.write(layer_record.getbuffer())
+                layer_records_size += fp.write(layer_record.getbuffer())
 
+            logging.debug(f'layer_records_size {layer_records_size}')
+            layer_info_size += layer_records_size
+
+            channel_data_size = 0
             for _, channel_data in layer_data:
-                layer_info_size += fp.write(channel_data.getbuffer())
+                channel_data_size += fp.write(channel_data.getbuffer())
 
-            layer_info_size += fp.write(_get_pad(layer_info_size, 8))
+            logging.debug(f'channel_data_size {channel_data_size}')
+            layer_info_size += channel_data_size
+
+            layer_info_size += fp.write(_get_pad(layer_info_size, 4))
 
             # Global layer mask info.
             global_layer_mask_size = fp.write(struct.pack('>I', 0))
 
             # Global tagged blocks (empty)
 
+            # Padding
+            final_pad = fp.write(_get_pad(layer_info_size, 4))
+
+            layer_and_mask_info_size += layer_info_size + global_layer_mask_size + final_pad
+            logging.debug(f'layer_and_mask_info_size {layer_and_mask_info_size}')
+            logging.debug(f'layer_info_size {layer_info_size}')
+            logging.debug(f'global_layer_mask_size {global_layer_mask_size}')
+            logging.debug(f'final_pad {final_pad}')
+
             # Rewrite layer and mask info header now that we know sizes
             fp.seek(layer_info_pos, io.SEEK_SET)
             fp.write(struct.pack(
                 config.vselect('>IIh', '>QQh'),
-                layer_info_size + global_layer_mask_size,
+                layer_and_mask_info_size,
                 layer_info_size,
-                -len(layer_data),
+                len(layer_data),
             ))
             fp.seek(0, io.SEEK_END)
 
             # Image data section (composite image)
             planes = composite_future.result()
-            fp.write(RLE_HEADER)
+            comp_size = fp.write(RLE_HEADER)
+            comp_alpha_data = planes.pop()
             for plane in planes:
                 for sub in plane:
-                    fp.write(sub)
+                    comp_size += fp.write(sub)
+            logging.debug(f'comp_size {comp_size}')
             progress.update()
 
             fp.close()
