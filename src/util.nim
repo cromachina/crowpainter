@@ -48,3 +48,8 @@ func new_seq_ref*[T](size: Natural): ref seq[T] =
 func new_ref*[T](s: T): ref T =
     new result
     result[] = s
+
+func `or`*(a, b: enum): typeof(a) =
+  when typeof(a) isnot typeof(b):
+    {.warning: "Bitwise `or` is unsafe for different enum types".}
+  typeof(a)(ord(a) or ord(b))

@@ -44,8 +44,6 @@ proc composite_tile*(canvas: Canvas, layers: Vec[Layer], frame_id: FrameId, offs
             else:
                 next_backdrop = ColorTile.new()
             color_src = composite_tile(canvas, GroupLayer(sublayer).layers, frame_id, offset, next_backdrop)
-        else:
-            discard
 
         let mask_src:Option[(MaskFrame, MaskTile)] = get_mask_tile(canvas, sublayer, frame_id, offset)
 

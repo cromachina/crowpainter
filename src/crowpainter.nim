@@ -7,6 +7,7 @@ when not compileOption("threads"):
 import imguin/sdl3_renderer
 import sdl3_nim as sdl
 import parazoa
+
 import std/strformat
 import std/logging
 import std/typedthreads
@@ -17,11 +18,6 @@ import canvas_data
 import composite
 import util
 import blendfuncs
-
-template `or`(a, b: enum): typeof(a) =
-  when typeof(a) isnot typeof(b):
-    {.warning: "Bitwise `or` is unsafe for different enum types".}
-  typeof(a)(ord(a) or ord(b))
 
 proc check_sdl(result: bool): void =
     if not result:
