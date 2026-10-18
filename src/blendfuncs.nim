@@ -3,7 +3,7 @@ import std/math
 import canvas_data
 import util
 
-const range_max*:int16 = 0x4000
+const range_max*:int16 = 0x3fff
 const range_half:int16 = range_max div 2
 const range_quarter:int16 = range_max div 4
 const range_2:int32 = range_max * 2
@@ -20,33 +20,56 @@ func make_sqrt_lut(): array[range_max + 1, int16] =
 
 const sqrt_lut = make_sqrt_lut()
 
-template a_a_func(name, body: untyped) =
-    func name*[T](dst {.inject.}: var T, src {.inject.}: T) =
-        for i {.inject.} in 0 ..< TILE_DATA_SIZE:
-            body
-
-template a_s_func(name, body: untyped) =
-    func name*[T](dst {.inject.}: var T, src {.inject.}: int16) =
-        for i {.inject.} in 0 ..< TILE_DATA_SIZE:
-            body
-
-template strided_call_2(fn, dst, src, src_stride: untyped) =
-    for i {.inject.} in 0 ..< TILE_DATA_SIZE:
-        dst[i] = fn(dst[i], src[])
-        src += src_stride
-
-template strided_call_3(fn, dst, src_a, src_a_stride, src_b, src_b_stride: untyped) =
-    for i {.inject.} in 0 ..< TILE_DATA_SIZE:
-        dst[i] = fn(dst[i], src_a[], src_b[])
-        src_a += src_a_stride
-        src_b += src_b_stride
-
 type
-    ColorArray* = array[TILE_DATA_SIZE, ColorPixel]
-    MaskArray* = array[TILE_DATA_SIZE, MaskPixel]
+    ColorArray* = openArray[ColorPixel]
+    MaskArray* = openArray[MaskPixel]
     Color3 = tuple[r:int16, g:int16, b:int16]
 
-func threshold(mask: var MaskArray, val: int16): int16 =
+func to_int16*(data: byte): int16 =
+    ((data.int16 shl 6) or (data.int16 shr 2))
+
+func to_byte*(data: int16): byte =
+    (data shr 6).byte
+
+func to_int16*(data: openArray[byte]): seq[int16] =
+    result.setlen(data.len)
+    for i in 0 ..< data.len:
+        result[i] = to_int16(data[i])
+
+func to_byte*(data: openArray[int16]): seq[byte] =
+    result.setlen(data.len)
+    for i in 0 ..< data.len:
+        result[i] = to_byte(data[i])
+
+func to_ColorPixel*(data: openArray[byte]): seq[ColorPixel] =
+    result.setlenUninit(data.len div 4)
+    var di = 0
+    for i in 0 ..< result.len:
+        result[i].r = to_int16(data[di])
+        result[i].g = to_int16(data[di + 1])
+        result[i].b = to_int16(data[di + 2])
+        result[i].a = to_int16(data[di + 3])
+        di += 4
+
+func to_byte*(data: ColorArray): seq[byte] =
+    result.setlenUninit(data.len * 4)
+    var di = 0
+    for i in 0 ..< data.len:
+        result[di] = to_byte(data[i].r)
+        result[di + 1] = to_byte(data[i].g)
+        result[di + 2] = to_byte(data[i].b)
+        result[di + 3] = to_byte(data[i].a)
+        di += 4
+
+func to_Color3*(C: ColorPixel): Color3 =
+    return (r: C.r, g: C.g, b: C.b)
+
+func to_ColorPixel*(x: var ColorPixel, y: Color3) =
+    x.r = y.r
+    x.g = y.g
+    x.b = y.b
+
+func threshold(val: int16): int16 =
     return if val == 0: 0 else: range_max
 
 func clip(val: int32): int16 =
@@ -62,12 +85,22 @@ func safe_divide(a, b: int32): int32 =
 func clip_divide*(a, b: int32): int16 =
     return clip(safe_divide(a, b))
 
+func clip_divide3[T](C: T, A: int32): Color3 =
+    result.r = clip_divide(C.r, A)
+    result.g = clip_divide(C.g, A)
+    result.b = clip_divide(C.b, A)
+
 func mul[T](a, b: T): T =
-    return (a * b) shr 14
+    return ((a.int32 * b.int32) shr 14).T
 
 func mul*(mask: var MaskArray, opacity: int16) =
-    for i in 0 ..< TILE_DATA_SIZE:
+    for i in 0 ..< mask.len:
         mask[i] = mul(mask[i], opacity)
+
+func mul3[T](C: T, A: int16): Color3 =
+    result.r = mul(C.r, A)
+    result.g = mul(C.g, A)
+    result.b = mul(C.b, A)
 
 func comp(C, A: int16): int16 =
     return mul(C, range_max - A)
@@ -78,170 +111,154 @@ func comp2(Cd, Cs, Ad, As: int16): int16 =
 func lerp(a, b, t: int16): int16 =
     return mul(b - a, t) + a
 
-template do_comp_3(fn, field, res, a, b, c: untyped) =
-    res.field = fn(a.field, b.field, c)
+func lerp[T](Cd, Cs: T, val: int16): Color3 =
+    result.r = lerp(Cd.r, Cs.r, val)
+    result.g = lerp(Cd.g, Cs.g, val)
+    result.b = lerp(Cd.b, Cs.b, val)
 
-template compwise_3(fn: untyped, res, da, db, dc: untyped) =
-    do_comp_3(fn, r, res, da, db, dc)
-    do_comp_3(fn, g, res, da, db, dc)
-    do_comp_3(fn, b, res, da, db, dc)
+func blend(Cs, Cd, Asrc, Adst, Aboth, B: int16): int16 =
+    return mul(Cs, Asrc) + mul(Cd, Adst) + mul(Aboth, B)
 
 func lerp*(a: var ColorArray, b: ColorArray, t: MaskArray) =
-    for i {.inject.} in 0 ..< TILE_DATA_SIZE:
-        compwise_3(lerp, a[i], a[i], b[i], t[i])
-
-func lerp*(a: var ColorArray, b: ColorArray, t: MaskPixel) =
-    for i {.inject.} in 0 ..< TILE_DATA_SIZE:
-        compwise_3(lerp, a[i], a[i], b[i], t)
-
-func lerp*(a: var ColorArray, b: ColorPixel, t: MaskArray) =
-    for i {.inject.} in 0 ..< TILE_DATA_SIZE:
-        compwise_3(lerp, a[i], a[i], b, t[i])
-
-func lerp*(a: var ColorArray, b: ColorPixel, t: MaskPixel) =
-    for i {.inject.} in 0 ..< TILE_DATA_SIZE:
-        compwise_3(lerp, a[i], a[i], b, t)
+    var
+        b_i = 0
+        t_i = 0
+    let
+        a_stride = if a.len == b.len: 1 else: 0
+        t_stride = if a.len == t.len: 1 else: 0
+    for i {.inject.} in 0 ..< a.len:
+        to_ColorPixel(a[i], lerp(a[i], b[i], t[i]))
 
 func normal_alpha(Ad, As: int16): int16 =
     return clip(Ad + As - mul(Ad, As))
 
-func normal_alpha*(Ad: var MaskArray, As: MaskArray) =
-    for i {.inject.} in 0 ..< TILE_DATA_SIZE:
-        Ad[i] = normal_alpha(Ad[i], As[i])
+func alpha_mask_part(Cd, Cs: ColorPixel, mask: MaskPixel): ColorPixel =
+    if mask < range_max:
+        to_ColorPixel(result, lerp(Cd, Cs, mask))
+        result.a = mul(Cs.a, mask)
+    else:
+        result = Cs
+    result.a = normal_alpha(Cd.a, result.a)
 
-template do_comp(fn, field, res, dst, src: untyped) =
-    res.field = fn(dst.field, dst.a, src.field, src.a)
+template compwise_premul(Cd, Cs, fn: untyped) =
+    result.r = fn(Cd.r, Cs.r, Cd.a, Cs.a)
+    result.g = fn(Cd.g, Cs.g, Cd.a, Cs.a)
+    result.b = fn(Cd.b, Cs.b, Cd.a, Cs.a)
 
-template compwise(fn, res, dst, src: untyped) =
-    do_comp(fn, r, res, dst, src)
-    do_comp(fn, g, res, dst, src)
-    do_comp(fn, b, res, dst, src)
+template compwise_straight(Cd, Cs, fn: untyped) =
+    result.r = fn(Cd.r, Cs.r)
+    result.g = fn(Cd.g, Cs.g)
+    result.b = fn(Cd.b, Cs.b)
 
-template vec_a_a_func(name, base_func: untyped) =
-    a_a_func name:
-        compwise(base_func, dst[i], src[i], dst[i])
+template composite_pixel_premul(Cd, Cs, fn: untyped) =
+    var Css = Cs
+    to_ColorPixel(Css, mul3(Css, Css.a))
+    return fn(Cd, Css)
 
-template vec_a_s_func(name, base_func: untyped) =
-    a_s_func name:
-        compwise(base_func, dst[i], src, dst[i])
-
-# Define a premultiplied blend function.
-template blend_func(func_name, body: untyped) =
-    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}, Ad {.inject.}, As {.inject.}: int16): int16 =
-        body
-    vec_a_a_func(func_name, `func_name base_func`)
-    vec_a_s_func(func_name, `func_name base_func`)
-
-template nonsep_vec_a_a_func(name, base_func: untyped) =
-    a_a_func name:
-        dst[i] = base_func(dst[i], src[i])
-
-template nonsep_vec_a_s_func(name, base_func: untyped) =
-    a_s_func name:
-        dst[i] = base_func(dst[i], src)
-
-# Define a nonseparable premultiplied blend function.
-template nonsep_blend_func(func_name, body: untyped) =
-    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorPixel =
-        body
-    nonsep_vec_a_a_func(func_name, `func_name base_func`)
-    nonsep_vec_a_s_func(func_name, `func_name base_func`)
-
-func blend(Csp, Cdp, Asrc, Adst, Aboth, B: int16): int16 =
-    return mul(Csp, Asrc) + mul(Cdp, Adst) + mul(Aboth, B)
-
-func premul(Cd, Cs, Ad, As: int16, fn: proc (Cd, Cs: int16): int16 {.noSideEffect.}): int16 =
+template composite_pixel_straight(Cd, Cs, fn: untyped) =
     let
-        Cdp = clip_divide(Cd, Ad)
-        Csp = clip_divide(Cs, As)
-        B = fn(Cdp, Csp)
+        Ad = Cd.a
+        As = Cs.a
+        Cdp = clip_divide3(Cd, Ad)
         Asrc = comp(As, Ad)
         Adst = comp(Ad, As)
         Aboth = mul(As, Ad)
-    return blend(Csp, Cdp, Asrc, Adst, Aboth, B)
+        B = fn(Cdp, to_Color3(Cs))
+    result.r = blend(Cs.r, Cdp.r, Asrc, Adst, Aboth, B.r)
+    result.g = blend(Cs.g, Cdp.g, Asrc, Adst, Aboth, B.g)
+    result.b = blend(Cs.b, Cdp.b, Asrc, Adst, Aboth, B.b)
+
+template composite*(res, dst, src, mask, opacity, composite_pixel_fn: untyped) =
+    var
+        src_i = 0
+        mask_i = 0
+    let
+        src_stride = if dst.len == src.len: 1 else: 0
+        mask_stride = if dst.len == mask.len: 1 else: 0
+    for i in 0 ..< res.len:
+        var Cs = src[src_i]
+        let Cd = dst[i]
+        Cs.a = mul(Cs.a, opacity)
+        to_ColorPixel(Cs, composite_pixel_fn(Cd, Cs))
+        res[i] = alpha_mask_part(Cd, Cs, mask[mask_i])
+        src_i += src_stride.int
+        mask_i += mask_stride.int
+
+# Define a compwise blend function.
+template blend_func(func_name, body: untyped) =
+    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}, Ad {.inject.}, As {.inject.}: int16): int16 =
+        body
+
+    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+        compwise_premul(Cd, Cs, `func_name base_func`)
+
+    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+        composite_pixel_premul(Cd, Cs, `func_name compwise`)
+
+    func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
+                    mask {.inject.}: MaskArray, opacity {.inject.}: MaskPixel) =
+        composite(res, dst, src, mask, opacity, `func_name composite_pixel`)
+
+# Define a nonseparable blend function.
+template nonsep_blend_func(func_name, body: untyped) =
+    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}: Color3): Color3 =
+        body
+
+    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+        composite_pixel_straight(Cd, Cs, `func_name base_func`)
+
+    func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
+                    mask {.inject.}: MaskArray, opacity {.inject.}: MaskPixel) =
+        composite(res, dst, src, mask, opacity, `func_name composite_pixel`)
+
+# Define a compwise straight blend function.
+template straight_blend_func(func_name, base_func: untyped, flip_dst_src: bool = false) =
+    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: Color3): Color3 =
+        compwise_straight(Cd, Cs, base_func)
+
+    when flip_dst_src:
+        func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+            composite_pixel_straight(Cs, Cd, `func_name compwise`)
+    when not flip_dst_src:
+        func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+            composite_pixel_straight(Cd, Cs, `func_name compwise`)
+
+    func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
+                    mask {.inject.}: MaskArray, opacity {.inject.}: MaskPixel) =
+        composite(res, dst, src, mask, opacity, `func_name composite_pixel`)
 
 # Define a straight blend function.
 template straight_func(name, body: untyped) =
     func name(Cd {.inject.}, Cs {.inject.}: int16): int16 =
         body
 
-# Define a premultiplied blend function with a straight function.
-template straight_blend_func(name, base_func: untyped) =
-    blend_func name:
-        return premul(Cd, Cs, Ad, As, base_func)
-
-func premul_nonseperable(Cd, Cs: ColorPixel, fn: proc (Cd, Cs: Color3): Color3 {.noSideEffect.}): ColorPixel =
-    let
-        Ad = Cd.a
-        As = Cs.a
-        Cdp_r = clip_divide(Cd.r, Ad)
-        Cdp_g = clip_divide(Cd.g, Ad)
-        Cdp_b = clip_divide(Cd.b, Ad)
-        Csp_r = clip_divide(Cs.r, As)
-        Csp_g = clip_divide(Cs.g, As)
-        Csp_b = clip_divide(Cs.b, As)
-        Asrc = comp(As, Ad)
-        Adst = comp(Ad, As)
-        Aboth = mul(As, Ad)
-        B = fn((r:Cdp_r, g:Cdp_g, b:Cdp_b), (r:Csp_r, g:Csp_g, b:Csp_b))
-        B_r = blend(Csp_r, Cdp_r, Asrc, Adst, Aboth, B.r)
-        B_g = blend(Csp_g, Cdp_g, Asrc, Adst, Aboth, B.g)
-        B_b = blend(Csp_b, Cdp_b, Asrc, Adst, Aboth, B.b)
-    return ColorPixel(r: B_r, g: B_g, b: B_b, a: As)
-
-# Define a nonseparable straight function.
-template nonsep_straight_func(name, body: untyped) =
-    func name(Cd {.inject.}, Cs {.inject.}: Color3): Color3 =
-        body
-
-# Define a premultiplied nonseparable blend function with a nonseparable straight function.
-template straight_nonsep_blend_func(name, base_func: untyped) =
-    nonsep_blend_func name:
-        return premul_nonseperable(Cd, Cs, base_func)
-
 blend_func normal:
     return Cs + comp(Cd, As)
 
-func composite_pixel(Cd: ColorPixel, Cs: ColorPixel, mask: MaskPixel, opacity: MaskPixel, fn: proc (Cd, Cs, Ad, As: int16): int16 {.noSideEffect.}): ColorPixel =
-    var
-        Cs = Cs
-        Cd = Cd
-    Cs.a = mul(Cs.a, opacity)
-    Cs.r = mul(Cs.r, Cs.a)
-    Cs.g = mul(Cs.g, Cs.a)
-    Cs.b = mul(Cs.b, Cs.a)
-    Cs.r = fn(Cd.r, Cs.r, Cd.a, Cs.a)
-    Cs.g = fn(Cd.g, Cs.g, Cd.a, Cs.a)
-    Cs.b = fn(Cd.b, Cs.b, Cd.a, Cs.a)
-    if mask < range_max:
-        result.r = lerp(Cd.r, Cs.r, mask)
-        result.g = lerp(Cd.g, Cs.g, mask)
-        result.b = lerp(Cd.b, Cs.b, mask)
-        Cs.a = mul(Cs.a, mask)
-    else:
-        result.r = Cs.r
-        result.g = Cs.g
-        result.b = Cs.b
-    result.a = normal_alpha(Cd.a, Cs.a)
-
-func composite(dst: var ColorArray, Cd: ColorArray, Cs: ColorArray, Cs_stride: uint8, mask: MaskArray, mask_stride: uint8, opacity: MaskPixel, fn: proc (Cd, Cs, Ad, As: int16): int16 {.noSideEffect.}) =
-    var
-        Cs_i = 0
-        mask_i = 0
-    for i in 0 ..< TILE_DATA_SIZE:
-        dst[i] = composite_pixel(Cd[i], Cs[Cs_i], mask[mask_i], opacity, fn)
-        Cs_i += Cs_stride.int
-        mask_i += mask_stride.int
-
-template strided_blend_func(func_name, body: untyped) =
-    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}, Ad {.inject.}, As {.inject.}: int16): int16 =
-        body
-    func func_name*(dst {.inject.}: var ColorArray, Cd {.inject.}: ColorArray, Cs {.inject.}: ColorArray, Cs_stride {.inject.}: uint8,
-                    mask {.inject.}: MaskArray, mask_stride {.inject.}: uint8, opacity {.inject.}: MaskPixel) =
-        composite(dst, Cd, Cs, Cs_stride, mask, mask_stride, opacity, `func_name base_func`)
-
-strided_blend_func normal_2:
+func normal_b(Cd, Cs, Ad, As: int16): int16 =
     return Cs + comp(Cd, As)
+
+func composite_normal*(res: var ColorArray, dst, src: ColorArray, mask: MaskArray, opacity: MaskPixel) =
+    var
+        src_i = 0
+        mask_i = 0
+    let
+        src_stride = if dst.len == src.len: 1 else: 0
+        mask_stride = if dst.len == mask.len: 1 else: 0
+    for i in 0 ..< res.len:
+        var Cs = src[src_i]
+        let Cd = dst[i]
+        Cs.a = mul(Cs.a, opacity)
+
+        to_ColorPixel(Cs, mul3(Cs, Cs.a))
+
+        Cs.r = normal_b(Cd.r, Cs.r, Cd.a, Cs.a)
+        Cs.g = normal_b(Cd.g, Cs.g, Cd.a, Cs.a)
+        Cs.b = normal_b(Cd.b, Cs.b, Cd.a, Cs.a)
+
+        res[i] = alpha_mask_part(Cd, Cs, mask[mask_i])
+        src_i += src_stride.int
+        mask_i += mask_stride.int
 
 blend_func multiply:
     return mul(Cd, Cs) + comp2(Cd, Cs, Ad, As)
@@ -259,9 +276,7 @@ straight_func hard_light_straight:
     else:
         return mul(Cd, Cs2)
 
-# Flipped src and dst
-blend_func overlay:
-    return premul(Cs, Cd, As, Ad, hard_light_straight)
+straight_blend_func(overlay, hard_light_straight, true)
 
 blend_func linear_burn:
     let
@@ -493,41 +508,29 @@ func set_sat(C: Color3, S: int16): Color3 =
     cmin[] = 0
     return C
 
-nonsep_straight_func hue_straight:
+nonsep_blend_func hue:
     return set_lum(set_sat(Cs, sat(Cd)), lum(Cd))
 
-straight_nonsep_blend_func(hue, hue_straight)
-
-nonsep_straight_func saturation_straight:
+nonsep_blend_func saturation:
     return set_lum(set_sat(Cd, sat(Cs)), lum(Cd))
 
-straight_nonsep_blend_func(saturation, saturation_straight)
-
-nonsep_straight_func color_straight:
+nonsep_blend_func color:
     return set_lum(Cs, lum(Cd))
 
-straight_nonsep_blend_func(color, color_straight)
-
-nonsep_straight_func luminosity_straight:
+nonsep_blend_func luminosity:
     return set_lum(Cd, lum(Cs))
 
-straight_nonsep_blend_func(luminosity, luminosity_straight)
-
-nonsep_straight_func darken_color_straight:
+nonsep_blend_func darken_color:
     if lum(Cs) < lum(Cd):
         return Cs
     else:
         return Cd
 
-straight_nonsep_blend_func(darken_color, darken_color_straight)
-
-nonsep_straight_func lighten_color_straight:
+nonsep_blend_func lighten_color:
     if lum(Cs) > lum(Cd):
         return Cs
     else:
         return Cd
-
-straight_nonsep_blend_func(lighten_color, lighten_color_straight)
 
 func noop[A, B](a: A, b: B) = discard
 
