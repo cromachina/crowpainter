@@ -1,0 +1,125 @@
+import std/typedthreads
+import std/locks
+import std/atomics
+import std/cpuinfo
+import std/deques
+import std/sysatomics
+
+# A threadpool that assigns tasks to CPU bound threads based on an
+# index so that the same index (mod worker count) with potentially the same
+# data goes to the same CPU each time.
+
+type
+    TaskProc* = typeof(proc(data: ref RootObj) {.thread.})
+
+    ChannelType[T] = object
+        lock: Lock
+        cond: Cond
+        queue: Deque[T]
+    Channel[T] = ref ChannelType[T]
+
+    # Doesn't return anything, for now.
+    Future* = ref object
+        lock: Lock
+        cond: Cond
+        finished: bool
+
+    TaskData = tuple[future: Future, task: TaskProc, data: ref RootObj]
+
+    WorkerThread* = ref object
+        channel: Channel[TaskData]
+        running: bool
+        thread: Thread[tuple[wt: WorkerThread]]
+
+    ThreadPool* = ref object
+        workers: seq[WorkerThread]
+
+proc del_channel[T](obj: ChannelType[T]) =
+    obj.lock.deinitLock
+    obj.cond.deinitCond
+
+proc new_channel*[T](): Channel[T] =
+    result.new(del_channel[T])
+    result.lock.initLock
+    result.cond.initCond
+
+proc put*[T](channel: Channel[T], value: T) =
+    withLock channel.lock:
+        channel.queue.addLast(value)
+        channel.cond.signal()
+
+proc get*[T](channel: Channel[T]): T =
+    withLock channel.lock:
+        if channel.queue.len == 0:
+            channel.cond.wait(channel.lock)
+        return channel.queue.popFirst()
+
+proc del_future(obj: typeof(Future()[])) =
+    obj.lock.deinitLock
+    obj.cond.deinitCond
+
+proc new_future*(): Future =
+    result.new(del_future)
+    result.lock.initLock
+    result.cond.initCond
+
+proc has_result*(future: Future): bool =
+    atomicLoadN(future.finished.addr, ATOMIC_SEQ_CST)
+
+proc wait_result*(future: Future) =
+    withLock future.lock:
+        if not future.has_result():
+            future.cond.wait(future.lock)
+
+proc set_result(future: Future) =
+    atomicStoreN(future.finished.addr, true, ATOMIC_SEQ_CST)
+    future.cond.signal()
+
+proc worker_thread_runner*(args: tuple[wt: WorkerThread]) {.thread.} =
+    while atomicLoadN(args.wt.running.addr, ATOMIC_SEQ_CST):
+        let (future, task, data) = args.wt.channel.get()
+        withLock future.lock:
+            task(data)
+            future.set_result()
+
+proc new_worker_thread*(affinity: int = -1): WorkerThread =
+    result.new
+    result.channel = new_channel[TaskData]()
+    atomicStoreN(result.running.addr, true, ATOMIC_SEQ_CST)
+    result.thread.createThread(worker_thread_runner, (result,))
+    if affinity >= 0:
+        result.thread.pinToCpu(affinity)
+
+proc new_thread_pool*(logical_per_phsycial_cores:int = 1, worker_count: int = 0): ThreadPool =
+    let
+        proc_count = cpuinfo.countProcessors()
+        count = if worker_count == 0: proc_count div logical_per_phsycial_cores else: worker_count
+    result.new
+    for i in 0 ..< count:
+        #result.workers.add(new_worker_thread((i * logical_per_phsycial_cores - 1) mod proc_count))
+        result.workers.add(new_worker_thread())
+
+proc noop(data: ref RootObj) = discard
+
+func get_worker_count*(pool: ThreadPool): int =
+    pool.workers.len
+
+# Maybe add a shutdown flag and finish all pending tasks first.
+# Matters more if threadpools are made from other threads.
+proc shutdown*(pool: ThreadPool) =
+    var future = new_future()
+    for worker in pool.workers:
+        atomicStoreN(worker.running.addr, false, ATOMIC_SEQ_CST)
+        worker.channel.put((future, noop, nil))
+        worker.thread.joinThread()
+    pool.workers.setLen(0)
+
+proc submit*(pool: ThreadPool, index:int, task: TaskProc, data: ref RootObj): Future =
+    let worker = pool.workers[index mod pool.workers.len]
+    var future = new_future()
+    worker.channel.put((future, task, data))
+    return future
+
+proc wait_all*(futures: openArray[Future]) =
+    for future in futures:
+        future.wait_result()

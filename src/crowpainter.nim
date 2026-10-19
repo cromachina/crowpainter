@@ -23,36 +23,6 @@ proc check_sdl(result: bool): void =
     if not result:
         quit(&"SDL Error: {SDL_GetError()}", -1)
 
-# var
-#     comp_lock: Lock
-
-# initLock(comp_lock)
-
-# proc composite_thread(data: tuple[canvas: ref Canvas]) {.thread.} =
-#     comp_lock.acquire()
-#     defer: comp_lock.release()
-#     data.canvas.size = Vector(x:200, y:200)
-#     data.canvas.top_level = data.canvas.top_level.add(Layer())
-#     sleep(1000)
-#     echo data.canvas[]
-
-# proc test_thread_temp_data() =
-#     var canvas = new Canvas
-#     block:
-#         var worker: Thread[tuple[canvas: ref Canvas]]
-#         createThread(worker, composite_thread, (canvas,))
-#         echo canvas[]
-#         sleep(500)
-#         comp_lock.acquire()
-#         echo canvas[]
-#         comp_lock.release()
-#         sleep(1000)
-#         joinThread(worker)
-
-# test_thread_temp_data()
-
-# deinitLock(comp_lock)
-
 proc main(): void =
     var logger = newConsoleLogger()
     check_sdl(SDL_Init(SDL_INIT_VIDEO))
@@ -112,20 +82,36 @@ proc main(): void =
         ImGui_ImplSDLRenderer3_RenderDrawData(cast[ptr impl_sdlrenderer3.ImDrawData](igGetDrawData()), renderer)
         SDL_RenderPresent(renderer)
 
-import times
+import threadpool
 import image_io
+import times
 
 proc timer(time: var float, str: string) =
     let next = cpuTime()
     echo fmt"{str} {next - time}"
     time = next
 
+type TestTaskData = ref object of RootObj
+    blendfunc: typeof(blendfuncs.normal)
+    first, last: int
+    res, dst, src: ref seq[ColorPixel]
+    mask: ref seq[MaskPixel]
+    opacity: int16
+
+proc do_blend_task_test(data: ref RootObj) {.thread.} =
+    let
+        args = (TestTaskData)(data)
+        first = args[].first
+        last = args[].last
+    args[].blendfunc(args.res[].toOpenArray(first, last), args.dst[].toOpenArray(first, last), args.src[].toOpenArray(first, last), args.mask[], blendfuncs.range_max)
+
 proc test() =
-    # var canvas = Canvas()
-    # echo canvas.size
-    # var backdrop = composite_tile(canvas, canvas.top_level, 0.FrameId, Vector(x:0, y:0), ColorTile.new)
     var total = cpuTime()
     var time = cpuTime()
+
+    var pool = new_thread_pool(2)
+    timer(time, "load threadpool")
+
     var fg = image_io.load("fg.png", image_io.ChannelType.Rgba)
     timer(time, "load fg")
 
@@ -137,22 +123,36 @@ proc test() =
     var bg2 = blendfuncs.to_ColorPixel(bg.data)
     timer(time, "convert bg")
 
-    var res = newSeqUninit[ColorPixel](fg2.len)
-    var mask = newSeqUninit[int16](1)
-    mask[0] = range_max
+    var res = new_ref_seq_uninit[ColorPixel](fg2[].len)
+    var mask = new_ref_seq_uninit[int16](1)
+    mask[][0] = range_max
     timer(time, "alloc result")
 
-    var first = (fg.channels * fg.width * 100).int
-    var last = (fg.channels * fg.width * 300).int
-    var slice = first .. last
+    let t2 = cpuTime()
+    let rounds = 10
 
-    # blendfuncs.normal(res.toOpenArray(first, last), bg2[slice], fg2[slice], mask, blendfuncs.range_max)
-    blendfuncs.normal(res, bg2, fg2, mask, blendfuncs.range_max)
+    for i in 0 ..< rounds:
+    # block:
+        var futures = newSeq[Future]()
+        let chunk_size = res[].len div pool.get_worker_count()
+        var ix = 0
+        var offset = 0
+        var done = false
+        while not done:
+            var data = TestTaskData(blendfunc: blendfuncs.normal, first:offset, last:min(offset + chunk_size, res[].len) - 1, res: res, dst: bg2, src:fg2, mask:mask, opacity: blendfuncs.range_max)
+            if data.last == res[].len - 1:
+                done = true
+            futures.add(pool.submit(ix, do_blend_task_test, data))
+            ix += 1
+            offset += chunk_size
+        wait_all(futures)
+
+    echo fmt"composite avg: {(cpuTime() - t2) / rounds.float}"
 
     timer(time, "composite")
 
     var res2 = Image(width: fg.width, height:fg.height, channels:fg.channels)
-    res2.data = blendfuncs.to_byte(res)
+    res2.data = blendfuncs.to_byte(res[])[]
     timer(time, "convert res")
 
     if not res2.write_jpg("test.jpg"):
@@ -160,13 +160,10 @@ proc test() =
 
     timer(time, "write")
 
+    pool.shutdown()
+    timer(time, "shutdown threadpool")
+
     timer(total, "total")
-    # var dst: ColorArray
-    # var src: ColorArray
-    # var mask: MaskArray
-    # var mask_stride:uint8 = 0
-    # var src_stride:uint8 = 1
-    # blendfuncs.normal_2(dst, dst, src, src_stride, mask, mask_stride, range_max)
 
 when isMainModule:
     # main()

@@ -6,22 +6,6 @@ import parazoa
 
 import util
 
-type
-    Vector* = object
-        x*, y*: int
-
-func `+`*(a, b: Vector): Vector =
-    Vector(x: a.x + b.x, y: a.y + b.y)
-
-func `-`*(a, b: Vector): Vector =
-    Vector(x: a.x - b.x, y: a.y - b.y)
-
-func `*`*(a: SomeNumber, b: Vector): Vector =
-    Vector(x: a * b.x, y: a * b.y)
-
-func `*`*(a: Vector, b: SomeNumber): Vector =
-    Vector(x: a.x * b, y: a.y * b)
-
 def_numerical(LayerId, uint)
 def_numerical(FrameId, uint)
 def_numerical(TimelinePos, uint)

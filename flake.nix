@@ -24,7 +24,7 @@
           libGL
           pkg-config
           nim
-          nimlangserver
+          #nimlangserver
           nimble
         ];
       };

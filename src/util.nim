@@ -1,4 +1,5 @@
 import std/options
+
 import parazoa
 
 template bin_op*(op: untyped, typ, base: typedesc) =
@@ -41,9 +42,13 @@ iterator reversed*[T](a: Vec[T]): T {.inline.} =
 func get_maybe*[K, V](m: Map[K, V], k: K): Option[V] =
     if m.contains(k): some(m[k]) else: none(V)
 
-func new_seq_ref*[T](size: Natural): ref seq[T] =
+func new_ref_seq*[T](size: Natural): ref seq[T] =
     new result
     result[].setlen(size)
+
+func new_ref_seq_uninit*[T](size: Natural): ref seq[T] =
+    new result
+    result[].setlenuninit(size)
 
 func new_ref*[T](s: T): ref T =
     new result
@@ -53,3 +58,19 @@ func `or`*(a, b: enum): typeof(a) =
   when typeof(a) isnot typeof(b):
     {.warning: "Bitwise `or` is unsafe for different enum types".}
   typeof(a)(ord(a) or ord(b))
+
+type
+    Vector* = object
+        x*, y*: int
+
+func `+`*(a, b: Vector): Vector =
+    Vector(x: a.x + b.x, y: a.y + b.y)
+
+func `-`*(a, b: Vector): Vector =
+    Vector(x: a.x - b.x, y: a.y - b.y)
+
+func `*`*(a: SomeNumber, b: Vector): Vector =
+    Vector(x: a * b.x, y: a * b.y)
+
+func `*`*(a: Vector, b: SomeNumber): Vector =
+    Vector(x: a.x * b, y: a.y * b)

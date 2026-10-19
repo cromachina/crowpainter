@@ -31,28 +31,28 @@ func to_int16*(data: byte): int16 =
 func to_byte*(data: int16): byte =
     (data shr 6).byte
 
-func to_int16*(data: openArray[byte]): seq[int16] =
-    result.setlen(data.len)
+func to_int16*(data: openArray[byte]): ref seq[int16] =
+    result = new_ref_seq_uninit[int16](data.len)
     for i in 0 ..< data.len:
         result[i] = to_int16(data[i])
 
-func to_byte*(data: openArray[int16]): seq[byte] =
-    result.setlen(data.len)
+func to_byte*(data: openArray[int16]): ref seq[byte] =
+    result = new_ref_seq_uninit[byte](data.len)
     for i in 0 ..< data.len:
         result[i] = to_byte(data[i])
 
-func to_ColorPixel*(data: openArray[byte]): seq[ColorPixel] =
-    result.setlenUninit(data.len div 4)
+func to_ColorPixel*(data: openArray[byte]): ref seq[ColorPixel] =
+    result = new_ref_seq_uninit[ColorPixel](data.len div 4)
     var di = 0
-    for i in 0 ..< result.len:
+    for i in 0 ..< result[].len:
         result[i].r = to_int16(data[di])
         result[i].g = to_int16(data[di + 1])
         result[i].b = to_int16(data[di + 2])
         result[i].a = to_int16(data[di + 3])
         di += 4
 
-func to_byte*(data: ColorArray): seq[byte] =
-    result.setlenUninit(data.len * 4)
+func to_byte*(data: ColorArray): ref seq[byte] =
+    result = new_ref_seq_uninit[byte](data.len * 4)
     var di = 0
     for i in 0 ..< data.len:
         result[di] = to_byte(data[i].r)
