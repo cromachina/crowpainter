@@ -53,8 +53,7 @@ type
 
     ChannelType* = int16
 
-    ColorPixel* = object
-        r*, g*, b*, a*: ChannelType
+    ColorPixel* = Color[ChannelType]
     MaskPixel* = ChannelType
 
     ColorPixelArray* = array[TILE_SIZE, array[TILE_SIZE, ColorPixel]]

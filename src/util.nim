@@ -74,3 +74,7 @@ func `*`*(a: SomeNumber, b: Vector): Vector =
 
 func `*`*(a: Vector, b: SomeNumber): Vector =
     Vector(x: a.x * b, y: a.y * b)
+
+type
+    Color*[T] = object
+        r*, g*, b*, a*: T

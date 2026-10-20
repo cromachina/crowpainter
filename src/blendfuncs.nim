@@ -22,6 +22,7 @@ const sqrt_lut = make_sqrt_lut()
 
 type
     ColorArray* = openArray[ColorPixel]
+    ColorByteArray* = openArray[Color[byte]]
     MaskArray* = openArray[MaskPixel]
     Color3 = tuple[r:int16, g:int16, b:int16]
 
@@ -31,43 +32,37 @@ func to_int16*(data: byte): int16 =
 func to_byte*(data: int16): byte =
     (data shr 6).byte
 
-func to_int16*(data: openArray[byte]): ref seq[int16] =
-    result = new_ref_seq_uninit[int16](data.len)
-    for i in 0 ..< data.len:
-        result[i] = to_int16(data[i])
+func convert*(res: var ColorPixel, data: Color[byte]) =
+    res.r = to_int16(data.r)
+    res.g = to_int16(data.g)
+    res.b = to_int16(data.b)
+    res.a = to_int16(data.a)
 
-func to_byte*(data: openArray[int16]): ref seq[byte] =
-    result = new_ref_seq_uninit[byte](data.len)
-    for i in 0 ..< data.len:
-        result[i] = to_byte(data[i])
+func convert*(res: var Color[byte], data: ColorPixel) =
+    res.r = to_byte(data.r)
+    res.g = to_byte(data.g)
+    res.b = to_byte(data.b)
+    res.a = to_byte(data.a)
 
-func to_ColorPixel*(data: openArray[byte]): ref seq[ColorPixel] =
-    result = new_ref_seq_uninit[ColorPixel](data.len div 4)
-    var di = 0
-    for i in 0 ..< result[].len:
-        result[i].r = to_int16(data[di])
-        result[i].g = to_int16(data[di + 1])
-        result[i].b = to_int16(data[di + 2])
-        result[i].a = to_int16(data[di + 3])
-        di += 4
+func convert*(res: var ColorArray, data: ColorByteArray) =
+    for i in 0 ..< res.len:
+        convert(res[i], data[i])
 
-func to_byte*(data: ColorArray): ref seq[byte] =
-    result = new_ref_seq_uninit[byte](data.len * 4)
-    var di = 0
+func convert*(res: var ColorByteArray, data: ColorArray) =
     for i in 0 ..< data.len:
-        result[di] = to_byte(data[i].r)
-        result[di + 1] = to_byte(data[i].g)
-        result[di + 2] = to_byte(data[i].b)
-        result[di + 3] = to_byte(data[i].a)
-        di += 4
+        convert(res[i], data[i])
+
+func to_byte*(data: ColorArray): ref seq[Color[byte]] =
+    result = new_ref_seq_uninit[Color[byte]](data.len)
+    convert(result[], data)
 
 func to_Color3*(C: ColorPixel): Color3 =
     return (r: C.r, g: C.g, b: C.b)
 
-func to_ColorPixel*(x: var ColorPixel, y: Color3) =
-    x.r = y.r
-    x.g = y.g
-    x.b = y.b
+func convert*(res: var ColorPixel, data: Color3) =
+    res.r = data.r
+    res.g = data.g
+    res.b = data.b
 
 func threshold(val: int16): int16 =
     return if val == 0: 0 else: range_max
@@ -126,15 +121,15 @@ func lerp*(a: var ColorArray, b: ColorArray, t: MaskArray) =
     let
         a_stride = if a.len == b.len: 1 else: 0
         t_stride = if a.len == t.len: 1 else: 0
-    for i {.inject.} in 0 ..< a.len:
-        to_ColorPixel(a[i], lerp(a[i], b[i], t[i]))
+    for i in 0 ..< a.len:
+        convert(a[i], lerp(a[i], b[i], t[i]))
 
 func normal_alpha(Ad, As: int16): int16 =
     return clip(Ad + As - mul(Ad, As))
 
 func alpha_mask_part(Cd, Cs: ColorPixel, mask: MaskPixel): ColorPixel =
     if mask < range_max:
-        to_ColorPixel(result, lerp(Cd, Cs, mask))
+        convert(result, lerp(Cd, Cs, mask))
         result.a = mul(Cs.a, mask)
     else:
         result = Cs
@@ -152,7 +147,7 @@ template compwise_straight(Cd, Cs, fn: untyped) =
 
 template composite_pixel_premul(Cd, Cs, fn: untyped) =
     var Css = Cs
-    to_ColorPixel(Css, mul3(Css, Css.a))
+    convert(Css, mul3(Css, Css.a))
     return fn(Cd, Css)
 
 template composite_pixel_straight(Cd, Cs, fn: untyped) =
@@ -179,7 +174,7 @@ template composite*(res, dst, src, mask, opacity, composite_pixel_fn: untyped) =
         var Cs = src[src_i]
         let Cd = dst[i]
         Cs.a = mul(Cs.a, opacity)
-        to_ColorPixel(Cs, composite_pixel_fn(Cd, Cs))
+        convert(Cs, composite_pixel_fn(Cd, Cs))
         res[i] = alpha_mask_part(Cd, Cs, mask[mask_i])
         src_i += src_stride.int
         mask_i += mask_stride.int
@@ -234,31 +229,6 @@ template straight_func(name, body: untyped) =
 
 blend_func normal:
     return Cs + comp(Cd, As)
-
-func normal_b(Cd, Cs, Ad, As: int16): int16 =
-    return Cs + comp(Cd, As)
-
-func composite_normal*(res: var ColorArray, dst, src: ColorArray, mask: MaskArray, opacity: MaskPixel) =
-    var
-        src_i = 0
-        mask_i = 0
-    let
-        src_stride = if dst.len == src.len: 1 else: 0
-        mask_stride = if dst.len == mask.len: 1 else: 0
-    for i in 0 ..< res.len:
-        var Cs = src[src_i]
-        let Cd = dst[i]
-        Cs.a = mul(Cs.a, opacity)
-
-        to_ColorPixel(Cs, mul3(Cs, Cs.a))
-
-        Cs.r = normal_b(Cd.r, Cs.r, Cd.a, Cs.a)
-        Cs.g = normal_b(Cd.g, Cs.g, Cd.a, Cs.a)
-        Cs.b = normal_b(Cd.b, Cs.b, Cd.a, Cs.a)
-
-        res[i] = alpha_mask_part(Cd, Cs, mask[mask_i])
-        src_i += src_stride.int
-        mask_i += mask_stride.int
 
 blend_func multiply:
     return mul(Cd, Cs) + comp2(Cd, Cs, Ad, As)

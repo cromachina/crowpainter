@@ -75,7 +75,7 @@ proc set_result(future: Future) =
     atomicStoreN(future.finished.addr, true, ATOMIC_SEQ_CST)
     future.cond.signal()
 
-proc worker_thread_runner*(args: tuple[wt: WorkerThread]) {.thread.} =
+proc worker_thread_runner(args: tuple[wt: WorkerThread]) {.thread.} =
     while atomicLoadN(args.wt.running.addr, ATOMIC_SEQ_CST):
         let (future, task, data) = args.wt.channel.get()
         withLock future.lock:
@@ -92,11 +92,10 @@ proc new_worker_thread*(affinity: int = -1): WorkerThread =
 
 proc new_thread_pool*(logical_per_phsycial_cores:int = 1, worker_count: int = 0): ThreadPool =
     let
-        proc_count = cpuinfo.countProcessors()
-        count = if worker_count == 0: proc_count div logical_per_phsycial_cores else: worker_count
+        proc_count = max(1, cpuinfo.countProcessors())
+        count = if worker_count == 0: max(1, proc_count div logical_per_phsycial_cores) else: worker_count
     result.new
     for i in 0 ..< count:
-        #result.workers.add(new_worker_thread((i * logical_per_phsycial_cores - 1) mod proc_count))
         result.workers.add(new_worker_thread())
 
 proc noop(data: ref RootObj) = discard
@@ -114,11 +113,14 @@ proc shutdown*(pool: ThreadPool) =
         worker.thread.joinThread()
     pool.workers.setLen(0)
 
+proc submit*(thread: WorkerThread, task: TaskProc, data: ref RootObj): Future =
+    var future = new_future()
+    thread.channel.put((future, task, data))
+    return future
+
 proc submit*(pool: ThreadPool, index:int, task: TaskProc, data: ref RootObj): Future =
     let worker = pool.workers[index mod pool.workers.len]
-    var future = new_future()
-    worker.channel.put((future, task, data))
-    return future
+    return worker.submit(task, data)
 
 proc wait_all*(futures: openArray[Future]) =
     for future in futures:

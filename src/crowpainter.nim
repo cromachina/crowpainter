@@ -98,9 +98,32 @@ type TestTaskData = ref object of RootObj
     mask: ref seq[MaskPixel]
     opacity: int16
 
+type ConvArgs[A, B] = ref object of RootObj
+    first, last: int
+    res: ref seq[A]
+    data: ref seq[B]
+
+proc do_parallel_convert[A, B](data: ref RootObj) {.thread.} =
+    let args = ConvArgs[A, B](data)
+    blendfuncs.convert(args.res[].toOpenArray(args.first, args.last), args.data[].toOpenArray(args.first, args.last))
+
+proc parellel_convert[A, B](pool: ThreadPool, res: ref seq[A], data: ref seq[B]) =
+    var futures = newSeq[Future]()
+    var ix = 0
+    var offset = 0
+    var chunk_size = res[].len div pool.get_worker_count()
+    while true:
+        var args = ConvArgs[A, B](first: offset, last: min(offset + chunk_size, res[].len) - 1, res: res, data:data)
+        futures.add(pool.submit(ix, do_parallel_convert[A, B], args))
+        ix += 1
+        offset += chunk_size
+        if offset >= res[].len:
+            break
+    wait_all(futures)
+
 proc do_blend_task_test(data: ref RootObj) {.thread.} =
     let
-        args = (TestTaskData)(data)
+        args = TestTaskData(data)
         first = args[].first
         last = args[].last
     args[].blendfunc(args.res[].toOpenArray(first, last), args.dst[].toOpenArray(first, last), args.src[].toOpenArray(first, last), args.mask[], blendfuncs.range_max)
@@ -112,15 +135,18 @@ proc test() =
     var pool = new_thread_pool(2)
     timer(time, "load threadpool")
 
-    var fg = image_io.load("fg.png", image_io.ChannelType.Rgba)
+    var fg = image_io.load("fg.png")
     timer(time, "load fg")
 
-    var bg = image_io.load("bg.png", image_io.ChannelType.Rgba)
+    var bg = image_io.load("bg.png")
     timer(time, "load bg")
 
-    var fg2 = blendfuncs.to_ColorPixel(fg.data)
+    var fg2 = new_ref_seq_uninit[ColorPixel](fg.data[].len)
+    parellel_convert(pool, fg2, fg.data)
     timer(time, "convert fg")
-    var bg2 = blendfuncs.to_ColorPixel(bg.data)
+
+    var bg2 = new_ref_seq_uninit[ColorPixel](bg.data[].len)
+    parellel_convert(pool, bg2, bg.data)
     timer(time, "convert bg")
 
     var res = new_ref_seq_uninit[ColorPixel](fg2[].len)
@@ -128,36 +154,26 @@ proc test() =
     mask[][0] = range_max
     timer(time, "alloc result")
 
-    let t2 = cpuTime()
-    let rounds = 10
-
-    for i in 0 ..< rounds:
-    # block:
-        var futures = newSeq[Future]()
-        let chunk_size = res[].len div pool.get_worker_count()
-        var ix = 0
-        var offset = 0
-        var done = false
-        while not done:
-            var data = TestTaskData(blendfunc: blendfuncs.normal, first:offset, last:min(offset + chunk_size, res[].len) - 1, res: res, dst: bg2, src:fg2, mask:mask, opacity: blendfuncs.range_max)
-            if data.last == res[].len - 1:
-                done = true
-            futures.add(pool.submit(ix, do_blend_task_test, data))
-            ix += 1
-            offset += chunk_size
-        wait_all(futures)
-
-    echo fmt"composite avg: {(cpuTime() - t2) / rounds.float}"
-
+    var futures = newSeq[Future]()
+    let chunk_size = res[].len div pool.get_worker_count()
+    var ix = 0
+    var offset = 0
+    while true:
+        var data = TestTaskData(blendfunc: blendfuncs.normal, first:offset, last:min(offset + chunk_size, res[].len) - 1, res: res, dst: bg2, src:fg2, mask:mask, opacity: blendfuncs.range_max)
+        futures.add(pool.submit(ix, do_blend_task_test, data))
+        ix += 1
+        offset += chunk_size
+        if offset >= res[].len:
+            break
+    wait_all(futures)
     timer(time, "composite")
 
-    var res2 = Image(width: fg.width, height:fg.height, channels:fg.channels)
-    res2.data = blendfuncs.to_byte(res[])[]
+    var out_image = image_io.new_image(fg.width, fg.height)
+    parellel_convert(pool, out_image.data, res)
     timer(time, "convert res")
 
-    if not res2.write_jpg("test.jpg"):
+    if not out_image.write_jpg("test.jpg"):
         echo "failed to write image"
-
     timer(time, "write")
 
     pool.shutdown()
