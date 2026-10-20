@@ -1,24 +1,28 @@
-when not compileOption("mm", "atomicArc"):
-    {.fatal: "This program must be compiled with --mm:atomicArc".}
-
-when not compileOption("threads"):
-    {.fatal: "This program must be compiled with --threads:on".}
-
 import imguin/sdl3_renderer
-import sdl3_nim as sdl
 import parazoa
+import sdl3_nim as sdl
 
-import std/strformat
-import std/logging
-import std/typedthreads
 import std/locks
+import std/logging
 import std/os
+import std/strformat
 import std/sugar
+import std/times
+import std/typedthreads
 
+import blendfuncs
 import canvas_data
 import composite
+import image_io
+import threadpool
 import util
-import blendfuncs
+
+proc parellel_convert[A, B](pool: ThreadPool, res: ref seq[A], data: ref seq[B]) =
+    var futures = newSeq[Future]()
+    for (first, last) in chunks(res[], res[].len div pool.get_worker_count):
+        capture first, last:
+            futures.add(pool.submit(() => blendfuncs.convert(res[].toOpenArray(first, last), data[].toOpenArray(first, last))))
+    wait_all(futures)
 
 proc check_sdl(result: bool): void =
     if not result:
@@ -83,30 +87,10 @@ proc main(): void =
         ImGui_ImplSDLRenderer3_RenderDrawData(cast[ptr impl_sdlrenderer3.ImDrawData](igGetDrawData()), renderer)
         SDL_RenderPresent(renderer)
 
-import threadpool
-import image_io
-import times
-
-proc timer(time: var float, str: string) =
-    let next = epochTime()
-    echo fmt"{str} {next - time}"
-    time = next
-
-proc parellel_convert[A, B](pool: ThreadPool, res: ref seq[A], data: ref seq[B]) =
-    var futures = newSeq[Future]()
-    let chunk_size = res[].len div pool.get_worker_count()
-    for first in countup(0, res[].len, chunk_size):
-        let last = min(first + chunk_size, res[].len) - 1
-        capture first, last:
-            futures.add(pool.submit(() => blendfuncs.convert(res[].toOpenArray(first, last), data[].toOpenArray(first, last))))
-    wait_all(futures)
-
 proc test() =
     var total = epochTime()
     var time = epochTime()
-
     var pool = new_thread_pool(true, 2)
-    timer(time, "load threadpool")
 
     var fg = image_io.load("fg.png")
     timer(time, "load fg")
@@ -125,16 +109,11 @@ proc test() =
     var res = new_ref_seq_uninit[ColorPixel](fg2[].len)
     var mask = new_ref_seq_uninit[int16](1)
     mask[][0] = range_max
-    timer(time, "alloc result")
-
     var futures = newSeq[Future]()
-    let chunk_size = TILE_DATA_SIZE * 3
-    for first in countup(0, res[].len, chunk_size):
-        let last = min(first + chunk_size, res[].len) - 1
-        capture first, last:
-            futures.add(pool.submit(() => blendfuncs.normal(res[].toOpenArray(first, last), bg2[].toOpenArray(first, last), fg2[].toOpenArray(first, last), mask[], blendfuncs.range_max)))
+    for i in chunks(res[], TILE_DATA_SIZE * 3):
+        capture i:
+            futures.add(pool.submit(() => blendfuncs.normal(res[].to_oa(i), bg2[].to_oa(i), fg2[].to_oa(i), mask[], blendfuncs.range_max)))
     wait_all(futures)
-
     timer(time, "composite")
 
     var out_image = image_io.new_image(fg.width, fg.height)
@@ -144,10 +123,6 @@ proc test() =
     if not out_image.write_jpg("test.jpg"):
         echo "failed to write image"
     timer(time, "write")
-
-    pool.shutdown()
-    timer(time, "shutdown threadpool")
-
     timer(total, "total")
 
 when isMainModule:

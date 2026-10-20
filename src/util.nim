@@ -1,6 +1,8 @@
-import std/options
-
 import parazoa
+
+import std/options
+import std/strformat
+import std/times
 
 template bin_op*(op: untyped, typ, base: typedesc) =
     func op*(x, y: typ): typ {.borrow.}
@@ -39,6 +41,10 @@ iterator reversed*[T](a: Vec[T]): T {.inline.} =
         yield a[i]
         dec(i)
 
+iterator chunks*[T](a: openArray[T], chunk_size: int): tuple[first, last: int] {.inline.} =
+    for first in countup(0, a.len, chunk_size):
+        yield (first, min(first + chunk_size, a.len) - 1)
+
 func get_maybe*[K, V](m: Map[K, V], k: K): Option[V] =
     if m.contains(k): some(m[k]) else: none(V)
 
@@ -58,6 +64,14 @@ func `or`*(a, b: enum): typeof(a) =
   when typeof(a) isnot typeof(b):
     {.warning: "Bitwise `or` is unsafe for different enum types".}
   typeof(a)(ord(a) or ord(b))
+
+proc timer*(time: var float, str: string) =
+    let next = epochTime()
+    echo fmt"{str} {next - time}"
+    time = next
+
+template to_oa*(a: untyped, args: tuple[first: int, last: int]): untyped =
+    a.toOpenArray(args.first, args.last)
 
 type
     Vector* = object
