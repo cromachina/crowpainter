@@ -9,6 +9,8 @@ import std/sysatomics
 # index so that the same index (mod worker count) with potentially the same
 # data goes to the same CPU each time.
 
+# If a shared channel is used for all threads, then the index doesn't matter.
+
 type
     TaskProc* = typeof(proc(data: ref RootObj) {.thread.})
 
@@ -50,7 +52,7 @@ proc put*[T](channel: Channel[T], value: T) =
 
 proc get*[T](channel: Channel[T]): T =
     withLock channel.lock:
-        if channel.queue.len == 0:
+        while channel.queue.len == 0:
             channel.cond.wait(channel.lock)
         return channel.queue.popFirst()
 
@@ -82,21 +84,22 @@ proc worker_thread_runner(args: tuple[wt: WorkerThread]) {.thread.} =
             task(data)
             future.set_result()
 
-proc new_worker_thread*(affinity: int = -1): WorkerThread =
+proc new_worker_thread*(channel: Channel[TaskData] = nil, affinity: int = -1): WorkerThread =
     result.new
-    result.channel = new_channel[TaskData]()
+    result.channel = if channel == nil: new_channel[TaskData]() else: channel
     atomicStoreN(result.running.addr, true, ATOMIC_SEQ_CST)
     result.thread.createThread(worker_thread_runner, (result,))
     if affinity >= 0:
         result.thread.pinToCpu(affinity)
 
-proc new_thread_pool*(logical_per_phsycial_cores:int = 1, worker_count: int = 0): ThreadPool =
+proc new_thread_pool*(shared_channels: bool = false, logical_per_phsycial_cores:int = 1, worker_count: int = 0): ThreadPool =
     let
         proc_count = max(1, cpuinfo.countProcessors())
         count = if worker_count == 0: max(1, proc_count div logical_per_phsycial_cores) else: worker_count
+        channel = if shared_channels: new_channel[TaskData]() else: nil
     result.new
     for i in 0 ..< count:
-        result.workers.add(new_worker_thread())
+        result.workers.add(new_worker_thread(channel))
 
 proc noop(data: ref RootObj) = discard
 
@@ -109,7 +112,9 @@ proc shutdown*(pool: ThreadPool) =
     var future = new_future()
     for worker in pool.workers:
         atomicStoreN(worker.running.addr, false, ATOMIC_SEQ_CST)
+    for worker in pool.workers:
         worker.channel.put((future, noop, nil))
+    for worker in pool.workers:
         worker.thread.joinThread()
     pool.workers.setLen(0)
 
@@ -118,7 +123,7 @@ proc submit*(thread: WorkerThread, task: TaskProc, data: ref RootObj): Future =
     thread.channel.put((future, task, data))
     return future
 
-proc submit*(pool: ThreadPool, index:int, task: TaskProc, data: ref RootObj): Future =
+proc submit*(pool: ThreadPool, task: TaskProc, data: ref RootObj, index:int = 0): Future =
     let worker = pool.workers[index mod pool.workers.len]
     return worker.submit(task, data)
 

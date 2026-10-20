@@ -87,21 +87,22 @@ import image_io
 import times
 
 proc timer(time: var float, str: string) =
-    let next = cpuTime()
+    let next = epochTime()
     echo fmt"{str} {next - time}"
     time = next
 
-type TestTaskData = ref object of RootObj
-    blendfunc: typeof(blendfuncs.normal)
-    first, last: int
-    res, dst, src: ref seq[ColorPixel]
-    mask: ref seq[MaskPixel]
-    opacity: int16
+type
+    TestTaskData = ref object of RootObj
+        blendfunc: typeof(blendfuncs.normal)
+        first, last: int
+        res, dst, src: ref seq[ColorPixel]
+        mask: ref seq[MaskPixel]
+        opacity: int16
 
-type ConvArgs[A, B] = ref object of RootObj
-    first, last: int
-    res: ref seq[A]
-    data: ref seq[B]
+    ConvArgs[A, B] = ref object of RootObj
+        first, last: int
+        res: ref seq[A]
+        data: ref seq[B]
 
 proc do_parallel_convert[A, B](data: ref RootObj) {.thread.} =
     let args = ConvArgs[A, B](data)
@@ -109,19 +110,12 @@ proc do_parallel_convert[A, B](data: ref RootObj) {.thread.} =
 
 proc parellel_convert[A, B](pool: ThreadPool, res: ref seq[A], data: ref seq[B]) =
     var futures = newSeq[Future]()
-    var ix = 0
-    var offset = 0
-    var chunk_size = res[].len div pool.get_worker_count()
-    while true:
-        var args = ConvArgs[A, B](first: offset, last: min(offset + chunk_size, res[].len) - 1, res: res, data:data)
-        futures.add(pool.submit(ix, do_parallel_convert[A, B], args))
-        ix += 1
-        offset += chunk_size
-        if offset >= res[].len:
-            break
+    for offset in countup(0, res[].len, TILE_DATA_SIZE):
+        var args = ConvArgs[A, B](first: offset, last: min(offset + TILE_DATA_SIZE, res[].len) - 1, res: res, data:data)
+        futures.add(pool.submit(do_parallel_convert[A, B], args))
     wait_all(futures)
 
-proc do_blend_task_test(data: ref RootObj) {.thread.} =
+func do_blend_task_test(data: ref RootObj) =
     let
         args = TestTaskData(data)
         first = args[].first
@@ -129,10 +123,10 @@ proc do_blend_task_test(data: ref RootObj) {.thread.} =
     args[].blendfunc(args.res[].toOpenArray(first, last), args.dst[].toOpenArray(first, last), args.src[].toOpenArray(first, last), args.mask[], blendfuncs.range_max)
 
 proc test() =
-    var total = cpuTime()
-    var time = cpuTime()
+    var total = epochTime()
+    var time = epochTime()
 
-    var pool = new_thread_pool(2)
+    var pool = new_thread_pool(true, 2)
     timer(time, "load threadpool")
 
     var fg = image_io.load("fg.png")
@@ -155,17 +149,11 @@ proc test() =
     timer(time, "alloc result")
 
     var futures = newSeq[Future]()
-    let chunk_size = res[].len div pool.get_worker_count()
-    var ix = 0
-    var offset = 0
-    while true:
-        var data = TestTaskData(blendfunc: blendfuncs.normal, first:offset, last:min(offset + chunk_size, res[].len) - 1, res: res, dst: bg2, src:fg2, mask:mask, opacity: blendfuncs.range_max)
-        futures.add(pool.submit(ix, do_blend_task_test, data))
-        ix += 1
-        offset += chunk_size
-        if offset >= res[].len:
-            break
+    for offset in countup(0, res[].len, TILE_DATA_SIZE):
+        var data = TestTaskData(blendfunc: blendfuncs.normal, first:offset, last:min(offset + TILE_DATA_SIZE, res[].len) - 1, res: res, dst: bg2, src:fg2, mask:mask, opacity: blendfuncs.range_max)
+        futures.add(pool.submit(do_blend_task_test, data))
     wait_all(futures)
+
     timer(time, "composite")
 
     var out_image = image_io.new_image(fg.width, fg.height)
