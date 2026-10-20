@@ -13,6 +13,7 @@ import std/logging
 import std/typedthreads
 import std/locks
 import std/os
+import std/sugar
 
 import canvas_data
 import composite
@@ -91,36 +92,14 @@ proc timer(time: var float, str: string) =
     echo fmt"{str} {next - time}"
     time = next
 
-type
-    TestTaskData = ref object of RootObj
-        blendfunc: typeof(blendfuncs.normal)
-        first, last: int
-        res, dst, src: ref seq[ColorPixel]
-        mask: ref seq[MaskPixel]
-        opacity: int16
-
-    ConvArgs[A, B] = ref object of RootObj
-        first, last: int
-        res: ref seq[A]
-        data: ref seq[B]
-
-proc do_parallel_convert[A, B](data: ref RootObj) {.thread.} =
-    let args = ConvArgs[A, B](data)
-    blendfuncs.convert(args.res[].toOpenArray(args.first, args.last), args.data[].toOpenArray(args.first, args.last))
-
 proc parellel_convert[A, B](pool: ThreadPool, res: ref seq[A], data: ref seq[B]) =
     var futures = newSeq[Future]()
-    for offset in countup(0, res[].len, TILE_DATA_SIZE):
-        var args = ConvArgs[A, B](first: offset, last: min(offset + TILE_DATA_SIZE, res[].len) - 1, res: res, data:data)
-        futures.add(pool.submit(do_parallel_convert[A, B], args))
+    let chunk_size = res[].len div pool.get_worker_count()
+    for first in countup(0, res[].len, chunk_size):
+        let last = min(first + chunk_size, res[].len) - 1
+        capture first, last:
+            futures.add(pool.submit(() => blendfuncs.convert(res[].toOpenArray(first, last), data[].toOpenArray(first, last))))
     wait_all(futures)
-
-func do_blend_task_test(data: ref RootObj) =
-    let
-        args = TestTaskData(data)
-        first = args[].first
-        last = args[].last
-    args[].blendfunc(args.res[].toOpenArray(first, last), args.dst[].toOpenArray(first, last), args.src[].toOpenArray(first, last), args.mask[], blendfuncs.range_max)
 
 proc test() =
     var total = epochTime()
@@ -149,9 +128,11 @@ proc test() =
     timer(time, "alloc result")
 
     var futures = newSeq[Future]()
-    for offset in countup(0, res[].len, TILE_DATA_SIZE):
-        var data = TestTaskData(blendfunc: blendfuncs.normal, first:offset, last:min(offset + TILE_DATA_SIZE, res[].len) - 1, res: res, dst: bg2, src:fg2, mask:mask, opacity: blendfuncs.range_max)
-        futures.add(pool.submit(do_blend_task_test, data))
+    let chunk_size = TILE_DATA_SIZE * 3
+    for first in countup(0, res[].len, chunk_size):
+        let last = min(first + chunk_size, res[].len) - 1
+        capture first, last:
+            futures.add(pool.submit(() => blendfuncs.normal(res[].toOpenArray(first, last), bg2[].toOpenArray(first, last), fg2[].toOpenArray(first, last), mask[], blendfuncs.range_max)))
     wait_all(futures)
 
     timer(time, "composite")

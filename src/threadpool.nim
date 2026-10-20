@@ -12,7 +12,7 @@ import std/sysatomics
 # If a shared channel is used for all threads, then the index doesn't matter.
 
 type
-    TaskProc* = typeof(proc(data: ref RootObj) {.thread.})
+    TaskProc* = typeof(proc() {.noSideEffect.})
 
     ChannelType[T] = object
         lock: Lock
@@ -26,7 +26,7 @@ type
         cond: Cond
         finished: bool
 
-    TaskData = tuple[future: Future, task: TaskProc, data: ref RootObj]
+    TaskData = tuple[future: Future, task: TaskProc]
 
     WorkerThread* = ref object
         channel: Channel[TaskData]
@@ -79,9 +79,9 @@ proc set_result(future: Future) =
 
 proc worker_thread_runner(args: tuple[wt: WorkerThread]) {.thread.} =
     while atomicLoadN(args.wt.running.addr, ATOMIC_SEQ_CST):
-        let (future, task, data) = args.wt.channel.get()
+        let (future, task) = args.wt.channel.get()
         withLock future.lock:
-            task(data)
+            task()
             future.set_result()
 
 proc new_worker_thread*(channel: Channel[TaskData] = nil, affinity: int = -1): WorkerThread =
@@ -101,10 +101,23 @@ proc new_thread_pool*(shared_channels: bool = false, logical_per_phsycial_cores:
     for i in 0 ..< count:
         result.workers.add(new_worker_thread(channel))
 
-proc noop(data: ref RootObj) = discard
+func noop() = discard
 
 func get_worker_count*(pool: ThreadPool): int =
     pool.workers.len
+
+proc submit*(thread: WorkerThread, task: TaskProc): Future =
+    var future = new_future()
+    thread.channel.put((future, task))
+    return future
+
+proc submit*(pool: ThreadPool, task: TaskProc, index:int = 0): Future =
+    let worker = pool.workers[index mod pool.workers.len]
+    return worker.submit(task)
+
+proc wait_all*(futures: openArray[Future]) =
+    for future in futures:
+        future.wait_result()
 
 # Maybe add a shutdown flag and finish all pending tasks first.
 # Matters more if threadpools are made from other threads.
@@ -113,20 +126,8 @@ proc shutdown*(pool: ThreadPool) =
     for worker in pool.workers:
         atomicStoreN(worker.running.addr, false, ATOMIC_SEQ_CST)
     for worker in pool.workers:
-        worker.channel.put((future, noop, nil))
+        discard worker.submit(noop)
+        # worker.channel.put((future, noop))
     for worker in pool.workers:
         worker.thread.joinThread()
     pool.workers.setLen(0)
-
-proc submit*(thread: WorkerThread, task: TaskProc, data: ref RootObj): Future =
-    var future = new_future()
-    thread.channel.put((future, task, data))
-    return future
-
-proc submit*(pool: ThreadPool, task: TaskProc, data: ref RootObj, index:int = 0): Future =
-    let worker = pool.workers[index mod pool.workers.len]
-    return worker.submit(task, data)
-
-proc wait_all*(futures: openArray[Future]) =
-    for future in futures:
-        future.wait_result()
