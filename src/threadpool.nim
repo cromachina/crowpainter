@@ -10,7 +10,6 @@ when not compileOption("threads"):
 
 # If a shared channel is used for all threads, then the index doesn't matter.
 
-import std/atomics
 import std/cpuinfo
 import std/deques
 import std/locks
@@ -43,12 +42,12 @@ type
         shutdown = false
         workers: seq[WorkerThread]
 
-proc del_channel[T](obj: ChannelType[T]) =
+proc `=destroy`[T](obj: ChannelType[T]) =
     obj.lock.deinitLock
     obj.cond.deinitCond
 
 proc new_channel*[T](): Channel[T] =
-    result.new(del_channel[T])
+    result.new
     result.lock.initLock
     result.cond.initCond
 
@@ -63,12 +62,12 @@ proc get*[T](channel: Channel[T]): T =
             channel.cond.wait(channel.lock)
         return channel.queue.popFirst()
 
-proc del_future(obj: typeof(Future()[])) =
+proc `=destroy`(obj: typeof(Future()[])) =
     obj.lock.deinitLock
     obj.cond.deinitCond
 
 proc new_future*(): Future =
-    result.new(del_future)
+    result.new
     result.lock.initLock
     result.cond.initCond
 
@@ -118,12 +117,9 @@ proc submit*(pool: ThreadPool, task: TaskProc, index:int = 0): Future =
 
 func noop() = discard
 
-# Maybe add a shutdown flag and finish all pending tasks first.
-# Matters more if threadpools are made from other threads.
-proc shutdown*(pool: ThreadPool) =
+proc `=destroy`(pool: typeof(ThreadPool()[])) =
     if pool.shutdown:
         return
-    pool.shutdown = true
     var future = new_future()
     for worker in pool.workers:
         atomicStoreN(worker.running.addr, false, ATOMIC_SEQ_CST)
@@ -131,6 +127,12 @@ proc shutdown*(pool: ThreadPool) =
         discard worker.submit(noop)
     for worker in pool.workers:
         worker.thread.joinThread()
+
+# Maybe add a shutdown flag and finish all pending tasks first.
+# Matters more if threadpools are made from other threads.
+proc shutdown*(pool: ThreadPool) =
+    `=destroy`(pool[])
+    pool.shutdown = true
     pool.workers.setLen(0)
 
 proc new_thread_pool*(shared_channels: bool = false, logical_per_phsycial_cores:int = 1, worker_count: int = 0): ThreadPool =
@@ -138,6 +140,6 @@ proc new_thread_pool*(shared_channels: bool = false, logical_per_phsycial_cores:
         proc_count = max(1, cpuinfo.countProcessors())
         count = if worker_count == 0: max(1, proc_count div logical_per_phsycial_cores) else: worker_count
         channel = if shared_channels: new_channel[TaskData]() else: nil
-    result.new(shutdown)
+    result.new
     for i in 0 ..< count:
         result.workers.add(new_worker_thread(channel))

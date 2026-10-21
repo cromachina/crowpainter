@@ -40,24 +40,24 @@ type
     STBIException* = object of ValueError
 
     Image* = ref object
-        width*: uint
-        height*: uint
-        channels*: uint
+        width*: int
+        height*: int
+        channels*: int
         data*: ref seq[Color[byte]]
 
-func new_image*(width, height: uint): Image =
-    var image = Image(width: width, height:height, channels: ChannelType.Rgba.uint)
+func new_image*(width, height: int): Image =
+    var image = Image(width: width, height:height, channels: ChannelType.Rgba.int)
     image.data.new
     image.data[].setLenUninit(width * height)
     return image
 
-func get_index(image: Image, x, y: uint): uint =
+func get_index(image: Image, x, y: int): int =
     x + (y * image.width)
 
-func `[]`*(image: Image, x, y: uint): Color[byte] =
+func `[]`*(image: Image, x, y: int): Color[byte] =
     image.data[image.get_index(x, y)]
 
-func `[]=`*(image: Image, x, y: uint, value: Color[byte]) =
+func `[]=`*(image: Image, x, y: int, value: Color[byte]) =
     image.data[image.get_index(x, y)] = value
 
 proc failure_reason(): string =
@@ -70,13 +70,13 @@ proc load*(filename: string): Image =
     if data == nil:
         raise newException(STBIException, failure_reason())
     defer: stbi_image_free(data)
-    var image = Image(width: width.uint, height: height.uint, channels: ChannelType.Rgba.uint)
+    var image = Image(width: width.int, height: height.int, channels: ChannelType.Rgba.int)
     image.data.new
     image.data[].setLenUninit(image.width * image.height)
     copyMem(image.data[][0].addr, data, image.data[].len * sizeof(image.data[][0]))
     return image
 
-proc write_png*(filename: string, width, height, channels: uint, data: seq[byte], compression_level:int = 8, png_filter:int = -1, stride_in_bytes: int = 0): bool =
+proc write_png*(filename: string, width, height, channels: int, data: seq[byte], compression_level:int = 8, png_filter:int = -1, stride_in_bytes: int = 0): bool =
     stbi_write_png_compression_level = compression_level.cint
     stbi_write_force_png_filter = png_filter.cint
     stbi_write_png(filename, width.cint, height.cint, channels.cint, data[0].unsafeAddr, stride_in_bytes.cint).bool
@@ -84,20 +84,20 @@ proc write_png*(filename: string, width, height, channels: uint, data: seq[byte]
 proc write_png*(image: Image, filename: string, compression_level:int = 8, png_filter:int = -1, stride_in_bytes: int = 0): bool =
     write_png(filename, image.width, image.height, image.channels, cast[seq[byte]](image.data[]), compression_level, png_filter, stride_in_bytes)
 
-proc write_bmp*(filename: string, width, height, channels: uint, data: seq[byte]): bool =
+proc write_bmp*(filename: string, width, height, channels: int, data: seq[byte]): bool =
     stbi_write_bmp(filename, width.cint, height.cint, channels.cint, data[0].unsafeAddr).bool
 
 proc write_bmp*(image: Image, filename: string): bool =
     write_bmp(filename, image.width, image.height, image.channels, cast[seq[byte]](image.data[]),)
 
-proc write_tga*(filename: string, width, height, channels: uint, data: seq[byte]): bool =
+proc write_tga*(filename: string, width, height, channels: int, data: seq[byte]): bool =
     stbi_write_tga(filename, width.cint, height.cint, channels.cint, data[0].unsafeAddr).bool
 
 proc write_tga*(image: Image, filename: string): bool =
     write_tga(filename, image.width, image.height, image.channels, cast[seq[byte]](image.data[]),)
 
-proc write_jpg*(filename: string, width, height, channels: uint, data: seq[byte], quality: uint = 90): bool =
+proc write_jpg*(filename: string, width, height, channels: int, data: seq[byte], quality: int = 90): bool =
     stbi_write_jpg(filename, width.cint, height.cint, channels.cint, data[0].unsafeAddr, quality.cint).bool
 
-proc write_jpg*(image: Image, filename: string, quality: uint = 90): bool =
+proc write_jpg*(image: Image, filename: string, quality: int = 90): bool =
     write_jpg(filename, image.width, image.height, image.channels, cast[seq[byte]](image.data[]), quality)
