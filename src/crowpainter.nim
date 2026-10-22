@@ -7,6 +7,7 @@ import std/locks
 import std/logging
 import std/math
 import std/os
+import std/paths
 import std/strformat
 import std/sugar
 import std/times
@@ -181,6 +182,78 @@ proc image_rotated(tex_id: GLuint, center, size: Imvec2, angle: float) =
     ImDrawList_AddCallback(drawlist, canvas_setup_callback, nil, 0)
     ImDrawList_AddImageQuad(drawlist, tex_ref, p0, p1, p2, p3, uv0, uv1, uv2, uv3, IM_COL32_WHITE)
     ImDrawList_AddCallback(drawlist, pio.DrawCallback_ResetRenderState, nil, 0)
+
+const default_zoom_level:int = 28
+
+type
+    Tool = ref object of RootObj
+        name: string
+
+    DynamicsProperty = object
+        enabled: bool
+        curve: seq[VectorF]
+
+    DynamicsProperties = object
+        value: int
+        pressure: DynamicsProperty
+        tilt: DynamicsProperty
+        speed: DynamicsProperty
+        direction: DynamicsProperty
+        stroke_randomness: DynamicsProperty
+        stamp_randomness: DynamicsProperty
+
+    Texture = ref object
+        size: VectorI
+        data: ref seq[MaskPixel]
+
+    BrushProperties = object
+        size: DynamicsProperties
+        opacity: DynamicsProperties
+        flow: DynamicsProperties
+        roundness: DynamicsProperties
+        softness: DynamicsProperties
+        spacing: DynamicsProperties
+        scatter: DynamicsProperties
+        angle: DynamicsProperties
+        antialias: bool
+        max_alpha: bool
+        shape: Texture
+        texture: Texture
+
+    Brush = ref object of Tool
+        current: BrushProperties
+        default: BrushProperties
+
+    Project = object
+        file_path: Path
+        states: Vec[Canvas]
+        current_id:int = 0
+        next_id: int = 0
+        saved_id: int = 0
+        composite: seq[ColorPixel]
+        selected_frame: FrameId
+        multi_selected_frames: seq[FrameId]
+        selected_layer: LayerId
+        multi_selected_layers: seq[LayerId]
+
+    Viewport = ref object
+        position: ImVec2
+        zoom_level: int = default_zoom_level
+        rotation: float = 0
+        project: ref Project
+        last_mouse_pos: ImVec2
+        panning: bool = false
+
+    App = ref object
+        open_projects: seq[ref Project]
+        active_viewport: Viewport
+        active_tool: Tool
+        fg_color: util.Color[byte]
+        bg_color: util.Color[byte]
+        brush_transparency: bool
+
+proc show_viewport(viewport: Viewport) =
+    discard
 
 proc main(): void =
     # Initialize SDL
