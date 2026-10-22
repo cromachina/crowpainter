@@ -2,7 +2,7 @@
 when withDir(thisDir(), system.fileExists("nimble.paths")):
   include "nimble.paths"
 switch("mm", "atomicArc")
-when defined(danger):
+when defined(danger) or defined(release):
     switch("opt", "speed")
     switch("passC", "-march=native")
 # end Nimble config

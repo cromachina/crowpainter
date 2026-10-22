@@ -16,6 +16,7 @@
             sdl3
             libGL
           ]);
+          NIX_ENFORCE_NO_NATIVE = "0";
         };
         inputsFrom = [
         ];

@@ -30,7 +30,7 @@ func get_layer_and_clip_groupings*(layers: Vec[Layer]): seq[(Layer, seq[Layer])]
     grouped_layers.reverse()
     return grouped_layers
 
-proc composite_tile*(canvas: Canvas, layers: Vec[Layer], frame_id: FrameId, offset: Vector, backdrop: ref ColorTile): ref ColorTile =
+proc composite_tile*(canvas: Canvas, layers: Vec[Layer], frame_id: FrameId, offset: VectorI, backdrop: ref ColorTile): ref ColorTile =
     for sublayer, clip_layers in get_layer_and_clip_groupings(layers).items:
         if not sublayer.visible:
             continue
@@ -46,5 +46,13 @@ proc composite_tile*(canvas: Canvas, layers: Vec[Layer], frame_id: FrameId, offs
             color_src = composite_tile(canvas, GroupLayer(sublayer).layers, frame_id, offset, next_backdrop)
 
         let mask_src:Option[(MaskFrame, MaskTile)] = get_mask_tile(canvas, sublayer, frame_id, offset)
+
+        # if blend_mode == BlendMode.Pass:
+        #     case mask_src:
+        #     of @Some(mask_val):
+        #         case mask_val
+        #         of @MaskFillTile(fill):
+        #             mask_src = blendfuncs.mul(mask_src, opacity)
+
 
     return backdrop

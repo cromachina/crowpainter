@@ -51,11 +51,6 @@ type
         TsHardMix,
         TsDifference,
 
-    ChannelType* = int16
-
-    ColorPixel* = Color[ChannelType]
-    MaskPixel* = ChannelType
-
     ColorPixelArray* = array[TILE_SIZE, array[TILE_SIZE, ColorPixel]]
     MaskPixelArray* = array[TILE_SIZE, array[TILE_SIZE, MaskPixel]]
 
@@ -77,11 +72,11 @@ type
         change_id*: uint = 0
         timeline_pos* = 0.TimelinePos
     ColorFrame* = object of Frame
-        tiles*: Map[Vector, ColorTile]
+        tiles*: Map[VectorI, ColorTile]
         temp*: ref seq[ColorPixel]
     MaskFrame* = object of Frame
         bg_white*: bool
-        tiles*: Map[Vector, MaskTile]
+        tiles*: Map[VectorI, MaskTile]
         temp*: ref seq[MaskPixel]
 
     Layer* = object of RootObj
@@ -112,12 +107,12 @@ type
     Canvas* = object
         frame_lookup*: Map[FrameId, ColorFrame]
         mask_frame_lookup*: Map[FrameId, MaskFrame]
-        size*: Vector
+        size*: VectorI
         top_level*: Vec[Layer]
-        selection*: Option[Map[Vector, MaskTile]]
+        selection*: Option[Map[VectorI, MaskTile]]
         background_settings*: BackgroundSettings
 
-func get_mask_tile*(canvas: Canvas, layer: Layer, frame_id: FrameId, offset: Vector): Option[(MaskFrame, MaskTile)] =
+func get_mask_tile*(canvas: Canvas, layer: Layer, frame_id: FrameId, offset: VectorI): Option[(MaskFrame, MaskTile)] =
     case canvas.mask_frame_lookup.get_maybe(frame_id):
     of Some(@frame):
         case frame.tiles.get_maybe(offset):
@@ -131,19 +126,19 @@ func all_equal*[T](s: seq[T]): bool =
             return false
     return true
 
-func get_tile_slice(canvas_size: Vector, tile_index: Vector): HSlice[int, int] =
+func get_tile_slice(canvas_size: VectorI, tile_index: VectorI): HSlice[int, int] =
     let index = tile_index.x * TILE_SIZE + tile_index.y * canvas_size.x
     let index_end = index + TILE_DATA_SIZE
     return index..index_end
 
-func tile_from_temp*(frame: ColorFrame, canvas_size: Vector, tile_index: Vector): ColorTile =
+func tile_from_temp*(frame: ColorFrame, canvas_size: VectorI, tile_index: VectorI): ColorTile =
     let chunk = frame.temp[get_tile_slice(canvas_size, tile_index)]
     return if all_equal(chunk):
         ColorFillTile(fill: chunk[0])
     else:
         ColorPixelTile(pixels: cast[ColorPixelArray](chunk))
 
-func tile_from_temp*(frame: MaskFrame, canvas_size: Vector, tile_index: Vector): MaskTile =
+func tile_from_temp*(frame: MaskFrame, canvas_size: VectorI, tile_index: VectorI): MaskTile =
     let chunk = frame.temp[get_tile_slice(canvas_size, tile_index)]
     return if all_equal(chunk):
         MaskFillTile(fill: chunk[0])

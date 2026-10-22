@@ -20,29 +20,33 @@ func make_sqrt_lut(): array[range_max + 1, int16] =
 
 const sqrt_lut = make_sqrt_lut()
 
-type
-    ColorArray* = openArray[ColorPixel]
-    ColorByteArray* = openArray[Color[byte]]
-    MaskArray* = openArray[MaskPixel]
-    Color3 = tuple[r:int16, g:int16, b:int16]
-
 func to_int16*(data: byte): int16 =
     ((data.int16 shl 6) or (data.int16 shr 2))
 
 func to_byte*(data: int16): byte =
     (data shr 6).byte
 
-func convert*(res: var ColorPixel, data: Color[byte]) =
+func convert*(res: var ColorPixel, data: ColorBytePixel) =
     res.r = to_int16(data.r)
     res.g = to_int16(data.g)
     res.b = to_int16(data.b)
     res.a = to_int16(data.a)
 
-func convert*(res: var Color[byte], data: ColorPixel) =
+func convert*(res: var ColorBytePixel, data: ColorPixel) =
     res.r = to_byte(data.r)
     res.g = to_byte(data.g)
     res.b = to_byte(data.b)
     res.a = to_byte(data.a)
+
+func convert*(res: var ColorPixel, data: ColorRgbPixel) =
+    res.r = data.r
+    res.g = data.g
+    res.b = data.b
+
+func to_ColorRgbPixel*(C: ColorPixel): ColorRgbPixel =
+    result.r = C.r
+    result.g = C.g
+    result.b = C.b
 
 func convert*(res: var ColorArray, data: ColorByteArray) =
     for i in 0 ..< res.len:
@@ -51,18 +55,6 @@ func convert*(res: var ColorArray, data: ColorByteArray) =
 func convert*(res: var ColorByteArray, data: ColorArray) =
     for i in 0 ..< data.len:
         convert(res[i], data[i])
-
-func to_byte*(data: ColorArray): ref seq[Color[byte]] =
-    result = new_ref_seq_uninit[Color[byte]](data.len)
-    convert(result[], data)
-
-func to_Color3*(C: ColorPixel): Color3 =
-    return (r: C.r, g: C.g, b: C.b)
-
-func convert*(res: var ColorPixel, data: Color3) =
-    res.r = data.r
-    res.g = data.g
-    res.b = data.b
 
 func threshold(val: int16): int16 =
     return if val == 0: 0 else: range_max
@@ -80,7 +72,7 @@ func safe_divide(a, b: int32): int32 =
 func clip_divide*(a, b: int32): int16 =
     return clip(safe_divide(a, b))
 
-func clip_divide3[T](C: T, A: int32): Color3 =
+func clip_divide3[T](C: T, A: int32): ColorRgbPixel =
     result.r = clip_divide(C.r, A)
     result.g = clip_divide(C.g, A)
     result.b = clip_divide(C.b, A)
@@ -92,7 +84,7 @@ func mul*(mask: var MaskArray, opacity: int16) =
     for i in 0 ..< mask.len:
         mask[i] = mul(mask[i], opacity)
 
-func mul3[T](C: T, A: int16): Color3 =
+func mul3[T](C: T, A: int16): ColorRgbPixel =
     result.r = mul(C.r, A)
     result.g = mul(C.g, A)
     result.b = mul(C.b, A)
@@ -106,23 +98,13 @@ func comp2(Cd, Cs, Ad, As: int16): int16 =
 func lerp(a, b, t: int16): int16 =
     return mul(b - a, t) + a
 
-func lerp[T](Cd, Cs: T, val: int16): Color3 =
+func lerp[T](Cd, Cs: T, val: int16): ColorRgbPixel =
     result.r = lerp(Cd.r, Cs.r, val)
     result.g = lerp(Cd.g, Cs.g, val)
     result.b = lerp(Cd.b, Cs.b, val)
 
 func blend(Cs, Cd, Asrc, Adst, Aboth, B: int16): int16 =
     return mul(Cs, Asrc) + mul(Cd, Adst) + mul(Aboth, B)
-
-func lerp*(a: var ColorArray, b: ColorArray, t: MaskArray) =
-    var
-        b_i = 0
-        t_i = 0
-    let
-        a_stride = if a.len == b.len: 1 else: 0
-        t_stride = if a.len == t.len: 1 else: 0
-    for i in 0 ..< a.len:
-        convert(a[i], lerp(a[i], b[i], t[i]))
 
 func normal_alpha(Ad, As: int16): int16 =
     return clip(Ad + As - mul(Ad, As))
@@ -134,6 +116,16 @@ func alpha_mask_part(Cd, Cs: ColorPixel, mask: MaskPixel): ColorPixel =
     else:
         result = Cs
     result.a = normal_alpha(Cd.a, result.a)
+
+func lerp*(a: var ColorArray, b: ColorArray, t: MaskArray) =
+    var
+        b_i = 0
+        t_i = 0
+    let
+        a_stride = if a.len == b.len: 1 else: 0
+        t_stride = if a.len == t.len: 1 else: 0
+    for i in 0 ..< a.len:
+        convert(a[i], lerp(a[i], b[i], t[i]))
 
 template compwise_premul(Cd, Cs, fn: untyped) =
     result.r = fn(Cd.r, Cs.r, Cd.a, Cs.a)
@@ -158,7 +150,7 @@ template composite_pixel_straight(Cd, Cs, fn: untyped) =
         Asrc = comp(As, Ad)
         Adst = comp(Ad, As)
         Aboth = mul(As, Ad)
-        B = fn(Cdp, to_Color3(Cs))
+        B = fn(Cdp, to_ColorRgbPixel(Cs))
     result.r = blend(Cs.r, Cdp.r, Asrc, Adst, Aboth, B.r)
     result.g = blend(Cs.g, Cdp.g, Asrc, Adst, Aboth, B.g)
     result.b = blend(Cs.b, Cdp.b, Asrc, Adst, Aboth, B.b)
@@ -184,10 +176,10 @@ template blend_func(func_name, body: untyped) =
     func `func_name base_func`(Cd {.inject.}, Cs {.inject.}, Ad {.inject.}, As {.inject.}: int16): int16 =
         body
 
-    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
         compwise_premul(Cd, Cs, `func_name base_func`)
 
-    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
         composite_pixel_premul(Cd, Cs, `func_name compwise`)
 
     func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
@@ -196,10 +188,10 @@ template blend_func(func_name, body: untyped) =
 
 # Define a nonseparable blend function.
 template nonsep_blend_func(func_name, body: untyped) =
-    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}: Color3): Color3 =
+    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}: ColorRgbPixel): ColorRgbPixel =
         body
 
-    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
         composite_pixel_straight(Cd, Cs, `func_name base_func`)
 
     func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
@@ -208,14 +200,14 @@ template nonsep_blend_func(func_name, body: untyped) =
 
 # Define a compwise straight blend function.
 template straight_blend_func(func_name, base_func: untyped, flip_dst_src: bool = false) =
-    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: Color3): Color3 =
+    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: ColorRgbPixel): ColorRgbPixel =
         compwise_straight(Cd, Cs, base_func)
 
     when flip_dst_src:
-        func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+        func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
             composite_pixel_straight(Cs, Cd, `func_name compwise`)
     when not flip_dst_src:
-        func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): Color3 =
+        func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
             composite_pixel_straight(Cd, Cs, `func_name compwise`)
 
     func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
@@ -396,16 +388,16 @@ straight_func clip_divide_short:
 
 straight_blend_func(divide, clip_divide_short)
 
-func lum(C: Color3): int16 =
+func lum(C: ColorRgbPixel): int16 =
     return mul(gamma_r, C.r) + mul(gamma_g, C.g) + mul(gamma_b, C.b)
 
-func min(C: Color3): int16 =
+func min(C: ColorRgbPixel): int16 =
     return min(min(C.r, C.g), C.b)
 
-func max(C: Color3): int16 =
+func max(C: ColorRgbPixel): int16 =
     return max(max(C.r, C.g), C.b)
 
-func clip_color(C: Color3): Color3 =
+func clip_color(C: ColorRgbPixel): ColorRgbPixel =
     let
         L = lum(C)
         n = min(C)
@@ -428,14 +420,14 @@ func clip_color(C: Color3): Color3 =
         Co.b = L + safe_divide(mul(C_bL, L1), xL).int16
     return C
 
-func set_lum(C: Color3, L: int16): Color3 =
+func set_lum(C: ColorRgbPixel, L: int16): ColorRgbPixel =
     let d = L - lum(C)
-    return clip_color((r: C.r + d, g: C.g + d, b: C.b + d))
+    return clip_color(ColorRgbPixel(r: C.r + d, g: C.g + d, b: C.b + d))
 
-func sat(C: Color3): int16 =
+func sat(C: ColorRgbPixel): int16 =
     return max(C.r, max(C.g, C.b)) - min(C.r, min(C.g, C.b))
 
-func set_sat(C: Color3, S: int16): Color3 =
+func set_sat(C: ColorRgbPixel, S: int16): ColorRgbPixel =
     var
         amax = max(C)
         amin = min(C)

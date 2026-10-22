@@ -27,7 +27,7 @@ proc parellel_convert[A, B](pool: ThreadPool, res: ref seq[A], data: ref seq[B])
     var futures = newSeq[Future]()
     for (first, last) in chunks(res[], res[].len div pool.get_worker_count):
         capture first, last:
-            futures.add(pool.submit(() => blendfuncs.convert(res[].toOpenArray(first, last), data[].toOpenArray(first, last))))
+            futures.add(pool.submit(() => convert(res[].toOpenArray(first, last), data[].toOpenArray(first, last))))
     wait_all(futures)
 
 # Maybe make a shader to render a tiled texture for canvases and render that
@@ -131,14 +131,13 @@ proc create_sampler(): GLuint =
     glGenSamplers(1, sampler.addr)
     glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
     glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
     glSamplerParameterf(sampler, GL_TEXTURE_LOD_BIAS, -0.5)
     return sampler
 
-var canvas_program: GLuint
 var canvas_sampler: GLuint
-
 proc canvas_setup_callback(a0: ptr ImDrawList, a1: ptr ImDrawCmd): void {.cdecl.} =
-    # glUseProgram(canvas_program)
     glBindSampler(0, canvas_sampler)
 
 func vec2(x, y: float): ImVec2 =
@@ -203,14 +202,14 @@ proc main(): void =
     # Init state
     var pool = new_thread_pool(true, 2)
 
-    # canvas_program = create_canvas_shader_program()
+    # var canvas_program = create_canvas_shader_program()
     canvas_sampler = create_sampler()
 
-    var image = image_io.load("fg.png")
+    var image = image_io.load[ImageRgba]("fg.png")
     var canvas_texture = create_canvas_texture()
     glBindTexture(GL_TEXTURE_2D, canvas_texture)
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0)
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA.GLint, image.width.GLsizei, image.height.GLsizei, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.data[0].addr)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA.GLint, image.size.x.GLsizei, image.size.y.GLsizei, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.data[0].addr)
     glGenerateMipmap(GL_TEXTURE_2D)
 
     var running = true
@@ -276,9 +275,10 @@ proc main(): void =
         let
             win_center = igGetWindowPos() + igGetWindowSize() * 0.5
             scale = 0.1
+            angle = 0.0
             offset = vec2(0, 0) + win_center
-            image_size = vec2(image.width.float, image.height.float) * scale
-        image_rotated(canvas_texture, win_center, image_size, 45)
+            image_size = vec2(image.size.x.float, image.size.y.float) * scale
+        image_rotated(canvas_texture, win_center, image_size, angle)
 
         igEnd()
 
@@ -294,10 +294,10 @@ proc test() =
     var time = epochTime()
     var pool = new_thread_pool(true, 2)
 
-    var fg = image_io.load("fg.png")
+    var fg = image_io.load[ImageRgba]("fg.png")
     timer(time, "load fg")
 
-    var bg = image_io.load("bg.png")
+    var bg = image_io.load[ImageRgba]("bg.png")
     timer(time, "load bg")
 
     var fg2 = new_ref_seq_uninit[ColorPixel](fg.data[].len)
@@ -318,7 +318,7 @@ proc test() =
     wait_all(futures)
     timer(time, "composite")
 
-    var out_image = image_io.new_image(fg.width, fg.height)
+    var out_image = image_io.new_image[ImageRgba](fg.size.x, fg.size.y)
     parellel_convert(pool, out_image.data, res)
     timer(time, "convert res")
 

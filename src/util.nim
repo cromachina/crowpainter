@@ -74,21 +74,38 @@ template to_oa*(a: untyped, args: tuple[first: int, last: int]): untyped =
     a.toOpenArray(args.first, args.last)
 
 type
-    Vector* = object
-        x*, y*: int
+    Vector*[T] = object
+        x*, y*: T
 
-func `+`*(a, b: Vector): Vector =
-    Vector(x: a.x + b.x, y: a.y + b.y)
+    VectorI* = Vector[int]
+    VectorF* = Vector[float]
 
-func `-`*(a, b: Vector): Vector =
-    Vector(x: a.x - b.x, y: a.y - b.y)
+    ColorGrayAlpha*[T] = object
+        r*, a*: T
 
-func `*`*(a: SomeNumber, b: Vector): Vector =
-    Vector(x: a * b.x, y: a * b.y)
+    ColorRgb*[T] = object
+        r*, g*, b*: T
 
-func `*`*(a: Vector, b: SomeNumber): Vector =
-    Vector(x: a.x * b, y: a.y * b)
-
-type
     Color*[T] = object
         r*, g*, b*, a*: T
+
+    ColorPixel* = Color[int16]
+    MaskPixel* = int16
+    ColorRgbPixel* = ColorRgb[int16]
+    ColorArray* = openArray[ColorPixel]
+    MaskArray* = openArray[MaskPixel]
+    ColorBytePixel* = Color[byte]
+    ColorByteArray* = openArray[ColorBytePixel]
+
+func `+`*[T](a, b: Vector[T]): Vector[T] =
+    Vector[T](x: a.x + b.x, y: a.y + b.y)
+
+func `-`*[T](a, b: Vector[T]): Vector[T] =
+    Vector[T](x: a.x - b.x, y: a.y - b.y)
+
+func `*`*[T](a: T, b: Vector[T]): Vector[T] =
+    Vector[T](x: a * b.x, y: a * b.y)
+
+func `*`*[T](a: Vector[T], b: T): Vector[T] =
+    Vector[T](x: a.x * b, y: a.y * b)
+
