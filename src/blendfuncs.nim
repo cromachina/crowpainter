@@ -109,7 +109,7 @@ func blend(Cs, Cd, Asrc, Adst, Aboth, B: int16): int16 =
 func normal_alpha(Ad, As: int16): int16 =
     return clip(Ad + As - mul(Ad, As))
 
-func alpha_mask_part(Cd, Cs: ColorPixel, mask: MaskPixel): ColorPixel =
+func alpha_mask_part(Cd, Cs: ColorPixel, mask: MaskPixel): ColorPixel  =
     if mask < range_max:
         convert(result, lerp(Cd, Cs, mask))
         result.a = mul(Cs.a, mask)
@@ -173,13 +173,13 @@ template composite*(res, dst, src, mask, opacity, composite_pixel_fn: untyped) =
 
 # Define a compwise blend function.
 template blend_func(func_name, body: untyped) =
-    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}, Ad {.inject.}, As {.inject.}: int16): int16 =
+    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}, Ad {.inject.}, As {.inject.}: int16): int16 {.inline.}=
         body
 
-    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
+    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel {.inline.} =
         compwise_premul(Cd, Cs, `func_name base_func`)
 
-    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
+    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel {.inline.} =
         composite_pixel_premul(Cd, Cs, `func_name compwise`)
 
     func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
@@ -221,6 +221,25 @@ template straight_func(name, body: untyped) =
 
 blend_func normal:
     return Cs + comp(Cd, As)
+
+{.push inline.}
+
+func normal_base_tiled(Cd, Cs, Ad, As: int16): int16 =
+    Cs + comp(Cd, As)
+
+func normal_compwise_tiled(Cd, Cs: ColorPixel): ColorRgbPixel =
+    compwise_premul(Cd, Cs, normal_base_tiled)
+
+{.pop.}
+
+func normal_tiled*(res: var ColorPixelArray, dst, src: ColorPixelArray, mask: MaskPixelArray, opacity: MaskPixel) =
+    for i in 0 ..< TILE_DATA_SIZE:
+        let Cd = dst[i]
+        var Cs = src[i]
+        Cs.a = mul(Cs.a, opacity)
+        convert(Cs, mul3(Cs, Cs.a))
+        convert(Cs, normal_compwise_tiled(Cd, Cs))
+        res[i] = alpha_mask_part(Cd, Cs, mask[i])
 
 blend_func multiply:
     return mul(Cd, Cs) + comp2(Cd, Cs, Ad, As)

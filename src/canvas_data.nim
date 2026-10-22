@@ -51,8 +51,8 @@ type
         TsHardMix,
         TsDifference,
 
-    ColorPixelArray* = array[TILE_SIZE, array[TILE_SIZE, ColorPixel]]
-    MaskPixelArray* = array[TILE_SIZE, array[TILE_SIZE, MaskPixel]]
+    ColorPixelArray* = array[TILE_DATA_SIZE, ColorPixel]
+    MaskPixelArray* = array[TILE_DATA_SIZE, MaskPixel]
 
     Tile* = object of RootObj
     ColorTile* = object of Tile

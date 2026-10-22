@@ -25,9 +25,20 @@ proc check_sdl(result: bool): void =
 
 proc parellel_convert[A, B](pool: ThreadPool, res: ref seq[A], data: ref seq[B]) =
     var futures = newSeq[Future]()
-    for (first, last) in chunks(res[], res[].len div pool.get_worker_count):
-        capture first, last:
-            futures.add(pool.submit(() => convert(res[].toOpenArray(first, last), data[].toOpenArray(first, last))))
+    when A is ColorPixelArray and B is util.Color[byte]:
+        var res2 = cast[ptr UncheckedArray[ColorPixel]](res[][0].addr)
+        for (first, last) in chunks(data[], data[].len div pool.get_worker_count):
+            capture first, last:
+                futures.add(pool.submit(() => convert(res2.toOpenArray(first, last), data[].toOpenArray(first, last))))
+    elif A is util.Color[byte] and B is ColorPixelArray:
+        var data2 = cast[ptr UncheckedArray[ColorPixel]](data[][0].addr)
+        for (first, last) in chunks(res[], res[].len div pool.get_worker_count):
+            capture first, last:
+                futures.add(pool.submit(() => convert(res[].toOpenArray(first, last), data2.toOpenArray(first, last))))
+    else:
+        for (first, last) in chunks(res[], res[].len div pool.get_worker_count):
+            capture first, last:
+                futures.add(pool.submit(() => convert(res[].toOpenArray(first, last), data[].toOpenArray(first, last))))
     wait_all(futures)
 
 # Maybe make a shader to render a tiled texture for canvases and render that
@@ -93,12 +104,14 @@ proc create_canvas_shader_program(): GLuint =
     glShaderSource(vert_handle, 1, arr, nil)
     glCompileShader(vert_handle)
     check_shader(vert_handle, "vertex shader")
+
     var frag_handle = glCreateShader(GL_FRAGMENT_SHADER)
     var arr2 = allocCStringArray([canvas_fragment_shader])
     defer: deallocCStringArray(arr2)
     glShaderSource(frag_handle, 1, arr2, nil)
     glCompileShader(frag_handle)
     check_shader(frag_handle, "fragment shader")
+
     var program = glCreateProgram()
     glAttachShader(program, vert_handle)
     glAttachShader(program, frag_handle)
@@ -114,9 +127,6 @@ proc create_canvas_texture(): GLuint =
     var texture: GLuint
     glGenTextures(1, texture.addr)
     glBindTexture(GL_TEXTURE_2D, texture)
-    # glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
-    # glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-    # glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -0.5)
     return texture
 
 proc create_canvas_framebuffer() =
@@ -289,37 +299,45 @@ proc main(): void =
         ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData())
         SDL_GL_SwapWindow(window)
 
-proc test() =
+func get_tile_count(length: int): int =
+    result = length div TILE_DATA_SIZE
+    if result * TILE_DATA_SIZE < length:
+        result += 1
+
+func get_pixel_count(tiles: int): int =
+    tiles * TILE_DATA_SIZE
+
+proc test(pool: ThreadPool) =
     var total = epochTime()
     var time = epochTime()
-    var pool = new_thread_pool(true, 2)
 
-    var fg = image_io.load[ImageRgba]("fg.png")
+    var fg_image = image_io.load[ImageRgba]("fg.png")
     timer(time, "load fg")
 
-    var bg = image_io.load[ImageRgba]("bg.png")
+    var bg_image = image_io.load[ImageRgba]("bg.png")
     timer(time, "load bg")
 
-    var fg2 = new_ref_seq_uninit[ColorPixel](fg.data[].len)
-    parellel_convert(pool, fg2, fg.data)
+    var fg_pixels = new_ref_seq_uninit[ColorPixel](fg_image.data[].len)
+    parellel_convert(pool, fg_pixels, fg_image.data)
     timer(time, "convert fg")
 
-    var bg2 = new_ref_seq_uninit[ColorPixel](bg.data[].len)
-    parellel_convert(pool, bg2, bg.data)
+    var bg_pixels = new_ref_seq_uninit[ColorPixel](bg_image.data[].len)
+    parellel_convert(pool, bg_pixels, bg_image.data)
     timer(time, "convert bg")
 
-    var res = new_ref_seq_uninit[ColorPixel](fg2[].len)
+    var res_pixels = new_ref_seq_uninit[ColorPixel](fg_pixels[].len)
     var mask = new_ref_seq_uninit[int16](1)
     mask[][0] = range_max
+
     var futures = newSeq[Future]()
-    for i in chunks(res[], TILE_DATA_SIZE * 3):
+    for i in chunks(res_pixels[], TILE_DATA_SIZE * 3):
         capture i:
-            futures.add(pool.submit(() => blendfuncs.normal(res[].to_oa(i), bg2[].to_oa(i), fg2[].to_oa(i), mask[], blendfuncs.range_max)))
+            futures.add(pool.submit(() => blendfuncs.normal(res_pixels[].to_oa(i), bg_pixels[].to_oa(i), fg_pixels[].to_oa(i), mask[], blendfuncs.range_max)))
     wait_all(futures)
     timer(time, "composite")
 
-    var out_image = image_io.new_image[ImageRgba](fg.size.x, fg.size.y)
-    parellel_convert(pool, out_image.data, res)
+    var out_image = image_io.new_image[ImageRgba](fg_image.size.x, fg_image.size.y)
+    parellel_convert(pool, out_image.data, res_pixels)
     timer(time, "convert res")
 
     if not out_image.write_jpg("test.jpg"):
@@ -327,6 +345,54 @@ proc test() =
     timer(time, "write")
     timer(total, "total")
 
+proc test_simd(pool: ThreadPool) =
+    var total = epochTime()
+    var time = epochTime()
+
+    var fg_image = image_io.load[ImageRgba]("fg.png")
+    timer(time, "load fg")
+
+    var bg_image = image_io.load[ImageRgba]("bg.png")
+    timer(time, "load bg")
+
+    var fg_pixels = new_ref_seq_uninit[ColorPixelArray](get_tile_count(fg_image.data[].len))
+    parellel_convert(pool, fg_pixels, fg_image.data)
+    timer(time, "convert fg")
+
+    var bg_pixels = new_ref_seq_uninit[ColorPixelArray](get_tile_count(bg_image.data[].len))
+    parellel_convert(pool, bg_pixels, bg_image.data)
+    timer(time, "convert bg")
+
+    var res_pixels = new_ref_seq_uninit[ColorPixelArray](fg_pixels[].len)
+    var mask = new(MaskPixelArray)
+    for i in 0 ..< mask[].len:
+        mask[][i] = blendfuncs.range_max
+
+    var futures = newSeq[Future]()
+    for first, last in chunks(res_pixels[], 32):
+        capture first, last:
+            func do_it() =
+                for i in first .. last:
+                    blendfuncs.normal_tiled(res_pixels[][i], bg_pixels[][i], fg_pixels[][i], mask[], blendfuncs.range_max)
+            futures.add(pool.submit(do_it))
+    wait_all(futures)
+    timer(time, "composite")
+
+    var out_image = image_io.new_image[ImageRgba](fg_image.size.x, fg_image.size.y)
+    parellel_convert(pool, out_image.data, res_pixels)
+    timer(time, "convert res")
+
+    if not out_image.write_jpg("test_simd.jpg"):
+        echo "failed to write image"
+    timer(time, "write")
+    timer(total, "total")
+
 when isMainModule:
-    main()
-    # test()
+    # main()
+    # Compositing is 3x faster with 1 core with tiles
+    # but only 1.3x faster with 12 cores with tiles.
+    # This is only with -march=native and -d:danger
+    var pool = new_thread_pool(true, 2)
+    test(pool)
+    test_simd(pool)
+    pool.shutdown()

@@ -108,4 +108,3 @@ func `*`*[T](a: T, b: Vector[T]): Vector[T] =
 
 func `*`*[T](a: Vector[T], b: T): Vector[T] =
     Vector[T](x: a.x * b, y: a.y * b)
-
