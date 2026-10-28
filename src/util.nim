@@ -1,13 +1,20 @@
 import parazoa
+import bbtree
 
 import std/options
 import std/strformat
 import std/times
+import fusion/matching
 
 template bin_op*(op: untyped, typ, base: typedesc) =
     func op*(x, y: typ): typ {.borrow.}
     func op*(x: base, y: typ): typ {.borrow.}
     func op*(x: typ, y: base): typ {.borrow.}
+
+template assn_op*(op: untyped, typ, base: typedesc) =
+    func op*(x: var typ, y: typ) {.borrow.}
+    func op*(x: var base, y: typ) {.borrow.}
+    func op*(x: var typ, y: base) {.borrow.}
 
 template bool_op*(op: untyped, typ, base: typedesc) =
     func op*(x, y: typ): bool {.borrow.}
@@ -20,6 +27,8 @@ template numerical*(typ, base:typedesc) =
     bin_op(`*`, typ, base)
     bin_op(`div`, typ, base)
     bin_op(`mod`, typ, base)
+    assn_op(`+=`, typ, base)
+    assn_op(`-=`, typ, base)
     bool_op(`<`, typ, base)
     bool_op(`<=`, typ, base)
     bool_op(`==`, typ, base)
@@ -47,6 +56,22 @@ iterator chunks*[T](a: openArray[T], chunk_size: int): tuple[first, last: int] {
 
 func get_maybe*[K, V](m: Map[K, V], k: K): Option[V] =
     if m.contains(k): some(m[k]) else: none(V)
+
+func get_or_next*[K, V](m: BBtree[K, V], k: K): Option[V] =
+    case m.get(k):
+    of Some(@val):
+        return some(val)
+    of None():
+        return m.getNext(k)
+
+func get_or_prev*[K, V](m: BBtree[K, V], k: K): Option[V] =
+    case m.get(k):
+    of Some(@val):
+        return some(val)
+    of None():
+        case m.getPrev(k):
+        of Some(@val):
+            return some(val[1])
 
 func new_ref_seq*[T](size: Natural): ref seq[T] =
     new result
@@ -95,6 +120,7 @@ type
     ColorArray* = openArray[ColorPixel]
     MaskArray* = openArray[MaskPixel]
     ColorBytePixel* = Color[byte]
+    ColorRgbBytePixel* = ColorRgb[byte]
     ColorByteArray* = openArray[ColorBytePixel]
 
 func `+`*[T](a, b: Vector[T]): Vector[T] =
@@ -108,3 +134,7 @@ func `*`*[T](a: T, b: Vector[T]): Vector[T] =
 
 func `*`*[T](a: Vector[T], b: T): Vector[T] =
     Vector[T](x: a.x * b, y: a.y * b)
+
+func copy_into*(x: var string, y: string) =
+    for i in 0 ..< min(x.len, y.len):
+        x[i] = y[i]

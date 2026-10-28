@@ -155,21 +155,24 @@ template composite_pixel_straight(Cd, Cs, fn: untyped) =
     result.g = blend(Cs.g, Cdp.g, Asrc, Adst, Aboth, B.g)
     result.b = blend(Cs.b, Cdp.b, Asrc, Adst, Aboth, B.b)
 
-template composite*(res, dst, src, mask, opacity, composite_pixel_fn: untyped) =
-    var
-        src_i = 0
-        mask_i = 0
-    let
-        src_stride = if dst.len == src.len: 1 else: 0
-        mask_stride = if dst.len == mask.len: 1 else: 0
+template composite_strided*(res, dst, src, mask, opacity, composite_pixel_fn: untyped) =
     for i in 0 ..< res.len:
-        var Cs = src[src_i]
+        var Cs = src[i]
         let Cd = dst[i]
+        let M = mask[i]
         Cs.a = mul(Cs.a, opacity)
         convert(Cs, composite_pixel_fn(Cd, Cs))
-        res[i] = alpha_mask_part(Cd, Cs, mask[mask_i])
-        src_i += src_stride.int
-        mask_i += mask_stride.int
+        res[i] = alpha_mask_part(Cd, Cs, M)
+
+# The fixed sized tiles let the compiler make vector ops when compiled with -d:danger.
+template composite_tiled*(res, dst, src, mask, opacity, composite_pixel_fn: untyped) =
+    for i in 0 ..< TILE_DATA_SIZE:
+        var Cs = src[i]
+        let Cd = dst[i]
+        let M = mask[i]
+        Cs.a = mul(Cs.a, opacity)
+        convert(Cs, composite_pixel_fn(Cd, Cs))
+        res[i] = alpha_mask_part(Cd, Cs, M)
 
 # Define a compwise blend function.
 template blend_func(func_name, body: untyped) =
@@ -184,7 +187,7 @@ template blend_func(func_name, body: untyped) =
 
     func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
                     mask {.inject.}: MaskArray, opacity {.inject.}: MaskPixel) =
-        composite(res, dst, src, mask, opacity, `func_name composite_pixel`)
+        composite_strided(res, dst, src, mask, opacity, `func_name composite_pixel`)
 
 # Define a nonseparable blend function.
 template nonsep_blend_func(func_name, body: untyped) =
@@ -196,7 +199,7 @@ template nonsep_blend_func(func_name, body: untyped) =
 
     func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
                     mask {.inject.}: MaskArray, opacity {.inject.}: MaskPixel) =
-        composite(res, dst, src, mask, opacity, `func_name composite_pixel`)
+        composite_strided(res, dst, src, mask, opacity, `func_name composite_pixel`)
 
 # Define a compwise straight blend function.
 template straight_blend_func(func_name, base_func: untyped, flip_dst_src: bool = false) =
@@ -212,7 +215,7 @@ template straight_blend_func(func_name, base_func: untyped, flip_dst_src: bool =
 
     func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
                     mask {.inject.}: MaskArray, opacity {.inject.}: MaskPixel) =
-        composite(res, dst, src, mask, opacity, `func_name composite_pixel`)
+        composite_strided(res, dst, src, mask, opacity, `func_name composite_pixel`)
 
 # Define a straight blend function.
 template straight_func(name, body: untyped) =
