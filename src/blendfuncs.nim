@@ -38,6 +38,9 @@ func convert*(res: var ColorBytePixel, data: ColorPixel) =
     res.b = to_byte(data.b)
     res.a = to_byte(data.a)
 
+func to_byte*(data: ColorPixel): ColorBytePixel =
+    convert(result, data)
+
 func convert*(res: var ColorPixel, data: ColorRgbPixel) =
     res.r = data.r
     res.g = data.g
@@ -110,21 +113,16 @@ func normal_alpha(Ad, As: int16): int16 =
     return clip(Ad + As - mul(Ad, As))
 
 func alpha_mask_part(Cd, Cs: ColorPixel, mask: MaskPixel): ColorPixel  =
-    if mask < range_max:
-        convert(result, lerp(Cd, Cs, mask))
-        result.a = mul(Cs.a, mask)
-    else:
-        result = Cs
+    convert(result, lerp(Cd, Cs, mask))
+    result.a = mul(Cs.a, mask)
     result.a = normal_alpha(Cd.a, result.a)
 
 func lerp*(a: var ColorArray, b: ColorArray, t: MaskArray) =
-    var
-        b_i = 0
-        t_i = 0
-    let
-        a_stride = if a.len == b.len: 1 else: 0
-        t_stride = if a.len == t.len: 1 else: 0
     for i in 0 ..< a.len:
+        convert(a[i], lerp(a[i], b[i], t[i]))
+
+func lerp*(a: var ColorPixelArray, b: ColorPixelArray, t: MaskPixelArray) =
+    for i in 0 ..< TILE_DATA_SIZE:
         convert(a[i], lerp(a[i], b[i], t[i]))
 
 template compwise_premul(Cd, Cs, fn: untyped) =
@@ -174,75 +172,62 @@ template composite_tiled*(res, dst, src, mask, opacity, composite_pixel_fn: unty
         convert(Cs, composite_pixel_fn(Cd, Cs))
         res[i] = alpha_mask_part(Cd, Cs, M)
 
+{.push dirty.}
+# Define final
+template make_composite_array_funcs(func_name, pixel_func: untyped) =
+    func `func_name`*(res: var ColorArray, dst: ColorArray, src: ColorArray,
+                    mask: MaskArray, opacity: MaskPixel) =
+        composite_strided(res, dst, src, mask, opacity, `func_name composite_pixel`)
+
+    func `func_name`*(res: var ColorPixelArray, dst: ColorPixelArray, src: ColorPixelArray,
+                    mask: MaskPixelArray, opacity: MaskPixel) =
+        composite_tiled(res, dst, src, mask, opacity, `func_name composite_pixel`)
+
 # Define a compwise blend function.
 template blend_func(func_name, body: untyped) =
-    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}, Ad {.inject.}, As {.inject.}: int16): int16 {.inline.}=
+    func `func_name base_func`(Cd, Cs, Ad, As: int16): int16 {.inline.}=
         body
 
-    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel {.inline.} =
+    func `func_name compwise`(Cd, Cs: ColorPixel): ColorRgbPixel {.inline.} =
         compwise_premul(Cd, Cs, `func_name base_func`)
 
-    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel {.inline.} =
+    func `func_name composite_pixel`(Cd, Cs: ColorPixel): ColorRgbPixel {.inline.} =
         composite_pixel_premul(Cd, Cs, `func_name compwise`)
 
-    func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
-                    mask {.inject.}: MaskArray, opacity {.inject.}: MaskPixel) =
-        composite_strided(res, dst, src, mask, opacity, `func_name composite_pixel`)
+    make_composite_array_funcs(func_name, `func_name composite_pixel`)
 
 # Define a nonseparable blend function.
 template nonsep_blend_func(func_name, body: untyped) =
-    func `func_name base_func`(Cd {.inject.}, Cs {.inject.}: ColorRgbPixel): ColorRgbPixel =
+    func `func_name base_func`(Cd, Cs: ColorRgbPixel): ColorRgbPixel {.inline.} =
         body
 
-    func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
+    func `func_name composite_pixel`(Cd, Cs: ColorPixel): ColorRgbPixel {.inline.} =
         composite_pixel_straight(Cd, Cs, `func_name base_func`)
 
-    func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
-                    mask {.inject.}: MaskArray, opacity {.inject.}: MaskPixel) =
-        composite_strided(res, dst, src, mask, opacity, `func_name composite_pixel`)
+    make_composite_array_funcs(func_name, `func_name composite_pixel`)
 
 # Define a compwise straight blend function.
 template straight_blend_func(func_name, base_func: untyped, flip_dst_src: bool = false) =
-    func `func_name compwise`(Cd {.inject.}, Cs {.inject.}: ColorRgbPixel): ColorRgbPixel =
+    func `func_name compwise`(Cd, Cs: ColorRgbPixel): ColorRgbPixel {.inline.} =
         compwise_straight(Cd, Cs, base_func)
 
     when flip_dst_src:
-        func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
+        func `func_name composite_pixel`(Cd, Cs: ColorPixel): ColorRgbPixel {.inline.} =
             composite_pixel_straight(Cs, Cd, `func_name compwise`)
     when not flip_dst_src:
-        func `func_name composite_pixel`(Cd {.inject.}, Cs {.inject.}: ColorPixel): ColorRgbPixel =
+        func `func_name composite_pixel`(Cd, Cs: ColorPixel): ColorRgbPixel {.inline.} =
             composite_pixel_straight(Cd, Cs, `func_name compwise`)
 
-    func func_name*(res {.inject.}: var ColorArray, dst {.inject.}: ColorArray, src {.inject.}: ColorArray,
-                    mask {.inject.}: MaskArray, opacity {.inject.}: MaskPixel) =
-        composite_strided(res, dst, src, mask, opacity, `func_name composite_pixel`)
+    make_composite_array_funcs(func_name, `func_name composite_pixel`)
 
 # Define a straight blend function.
 template straight_func(name, body: untyped) =
-    func name(Cd {.inject.}, Cs {.inject.}: int16): int16 =
+    func name(Cd, Cs: int16): int16 =
         body
+{.pop.}
 
 blend_func normal:
     return Cs + comp(Cd, As)
-
-{.push inline.}
-
-func normal_base_tiled(Cd, Cs, Ad, As: int16): int16 =
-    Cs + comp(Cd, As)
-
-func normal_compwise_tiled(Cd, Cs: ColorPixel): ColorRgbPixel =
-    compwise_premul(Cd, Cs, normal_base_tiled)
-
-{.pop.}
-
-func normal_tiled*(res: var ColorPixelArray, dst, src: ColorPixelArray, mask: MaskPixelArray, opacity: MaskPixel) =
-    for i in 0 ..< TILE_DATA_SIZE:
-        let Cd = dst[i]
-        var Cs = src[i]
-        Cs.a = mul(Cs.a, opacity)
-        convert(Cs, mul3(Cs, Cs.a))
-        convert(Cs, normal_compwise_tiled(Cd, Cs))
-        res[i] = alpha_mask_part(Cd, Cs, mask[i])
 
 blend_func multiply:
     return mul(Cd, Cs) + comp2(Cd, Cs, Ad, As)
