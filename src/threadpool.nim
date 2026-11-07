@@ -1,5 +1,5 @@
-when not compileOption("mm", "atomicArc"):
-    {.fatal: "This program must be compiled with --mm:atomicArc".}
+when not (compileOption("mm", "atomicArc") or compileOption("mm", "boehm")):
+    {.fatal: "This program must be compiled with --mm:atomicArc or --mm:boehm".}
 
 when not compileOption("threads"):
     {.fatal: "This program must be compiled with --threads:on".}
@@ -19,16 +19,18 @@ import std/typedthreads
 type
     TaskProc* = typeof(proc() {.noSideEffect.})
 
-    ChannelType[T] = object
+    LCond* = ref object
         lock: Lock
         cond: Cond
+
+    ChannelType[T] = object
+        lcond: LCond
         queue: Deque[T]
-    Channel[T] = ref ChannelType[T]
+    Channel*[T] = ref ChannelType[T]
 
     # Doesn't return anything, for now.
     Future* = ref object
-        lock: Lock
-        cond: Cond
+        lcond: LCond
         finished: bool
 
     TaskData = tuple[future: Future, task: TaskProc]
@@ -42,46 +44,56 @@ type
         shutdown = false
         workers: seq[WorkerThread]
 
-proc `=destroy`[T](obj: ChannelType[T]) =
-    obj.lock.deinitLock
-    obj.cond.deinitCond
+proc new_lcond*(): LCond =
+    when defined boehmGC:
+        result.new(proc (x: auto) =
+            x.lock.deinitLock
+            x.cond.deinitCond
+        )
+    else:
+        result.new(proc (x: typeof(LCond()[])) =
+            x.lock.deinitLock
+            x.cond.deinitCond
+        )
+    result.lock.initLock
+    result.cond.initCond
+
+proc wait*(lcond: LCond) =
+    lcond.cond.wait(lcond.lock)
+
+proc signal*(lcond: LCond) =
+    lcond.cond.signal()
 
 proc new_channel*[T](): Channel[T] =
     result.new
-    result.lock.initLock
-    result.cond.initCond
+    result.lcond = new_lcond()
 
 proc put*[T](channel: Channel[T], value: T) =
-    withLock channel.lock:
+    withLock channel.lcond.lock:
         channel.queue.addLast(value)
-        channel.cond.signal()
+        channel.lcond.signal()
 
 proc get*[T](channel: Channel[T]): T =
-    withLock channel.lock:
+    withLock channel.lcond.lock:
         while channel.queue.len == 0:
-            channel.cond.wait(channel.lock)
+            channel.lcond.wait()
         return channel.queue.popFirst()
-
-proc `=destroy`(obj: typeof(Future()[])) =
-    obj.lock.deinitLock
-    obj.cond.deinitCond
 
 proc new_future*(): Future =
     result.new
-    result.lock.initLock
-    result.cond.initCond
+    result.lcond = new_lcond()
 
 proc has_result*(future: Future): bool =
     atomicLoadN(future.finished.addr, ATOMIC_SEQ_CST)
 
 proc wait_result*(future: Future) =
-    withLock future.lock:
+    withLock future.lcond.lock:
         if not future.has_result():
-            future.cond.wait(future.lock)
+            future.lcond.wait()
 
-proc set_result(future: Future) =
+proc set_result*(future: Future) =
     atomicStoreN(future.finished.addr, true, ATOMIC_SEQ_CST)
-    future.cond.signal()
+    future.lcond.signal()
 
 proc wait_all*(futures: openArray[Future]) =
     for future in futures:
@@ -90,7 +102,7 @@ proc wait_all*(futures: openArray[Future]) =
 proc worker_thread_runner(args: tuple[wt: WorkerThread]) {.thread.} =
     while atomicLoadN(args.wt.running.addr, ATOMIC_SEQ_CST):
         let (future, task) = args.wt.channel.get()
-        withLock future.lock:
+        withLock future.lcond.lock:
             task()
             future.set_result()
 
@@ -115,27 +127,22 @@ proc submit*(pool: ThreadPool, task: TaskProc, index:int = 0): Future =
     let worker = pool.workers[index mod pool.workers.len]
     return worker.submit(task)
 
-func noop() = discard
-
-proc `=destroy`(pool: typeof(ThreadPool()[])) =
+# Maybe finish all pending tasks first.
+# Matters more if threadpools are made from other threads.
+proc `=destroy`(pool: var typeof(ThreadPool()[])) =
     if pool.shutdown:
         return
+    pool.shutdown = true
     var future = new_future()
     for worker in pool.workers:
         atomicStoreN(worker.running.addr, false, ATOMIC_SEQ_CST)
     for worker in pool.workers:
-        discard worker.submit(noop)
+        discard worker.submit(func () = discard)
     for worker in pool.workers:
         worker.thread.joinThread()
-
-# Maybe add a shutdown flag and finish all pending tasks first.
-# Matters more if threadpools are made from other threads.
-proc shutdown*(pool: ThreadPool) =
-    `=destroy`(pool[])
-    pool.shutdown = true
     pool.workers.setLen(0)
 
-proc new_thread_pool*(shared_channels: bool = false, logical_per_phsycial_cores:int = 1, worker_count: int = 0): ThreadPool =
+proc new_thread_pool*(logical_per_phsycial_cores:int = 1, worker_count: int = 0, shared_channels: bool = true): ThreadPool =
     let
         proc_count = max(1, cpuinfo.countProcessors())
         count = if worker_count == 0: max(1, proc_count div logical_per_phsycial_cores) else: worker_count
