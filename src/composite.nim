@@ -1,13 +1,12 @@
 ## Compositing functions.
 import std/algorithm
-import std/options
-import fusion/matching
 
 import parazoa
 
 import util
 import canvas_data
 import blendfuncs
+import option
 
 func get_layer_and_clip_groupings*(canvas: Canvas, layers: Vec[LayerId]): seq[(LayerId, seq[LayerId])] =
     var grouped_layers: seq[(LayerId, seq[LayerId])] = @[]
@@ -29,41 +28,43 @@ func get_layer_and_clip_groupings*(canvas: Canvas, layers: Vec[LayerId]): seq[(L
         grouped_layers.add((sublayer_id, empty))
     return grouped_layers
 
+func init_blank_color: ColorPixelArray =
+    result
+
 func init_blank_mask(): MaskPixelArray =
     for i in 0 ..< result.len:
         result[i] = blendfuncs.range_max
 
+const blank_color = init_blank_color()
 const blank_mask = init_blank_mask()
 
-proc composite_tile*(canvas: Canvas, layers: Vec[LayerId], timeline_pos: TimelinePos, offset: VectorI, backdrop: ref ColorTile): ref ColorTile =
+proc composite*(canvas: Canvas, layers: Vec[LayerId], timeline_pos: TimelinePos, offset: VectorI, backdrop: ref seq[ColorPixelArray]) =
     for (sublayer_id, clip_layers) in get_layer_and_clip_groupings(canvas, layers):
         let sublayer = canvas.layer_lookup[sublayer_id]
         if not sublayer.visible:
             continue
 
-        var color_src: ref ColorTile
+        var color_src: ref seq[ColorPixelArray]
 
         if sublayer of GroupLayer:
-            var next_backdrop: ref ColorTile
+            var group = GroupLayer(sublayer)
             if sublayer.blend_mode == BlendMode.Pass:
-                next_backdrop[] = backdrop[]
+                group.temp[] = backdrop[]
             else:
-                next_backdrop = ColorTile.new()
-            color_src = composite_tile(canvas, GroupLayer(sublayer).layers, timeline_pos, offset, next_backdrop)
+                for i in 0 ..< group.temp[].len:
+                    group.temp[][i] = blank_color
+            composite(canvas, GroupLayer(sublayer).layers, timeline_pos, offset, group.temp)
 
         let mask_frame = get_mask_frame(canvas, sublayer, timeline_pos)
         var mask_src: MaskPixelArray
         case mask_frame:
         of Some(@frame):
-            mask_src = get_temp_tile(frame, get_tiles_size(canvas.size.x), offset)
+            mask_src = get_tile_data(frame, get_tiles_size(canvas.size.x), offset)
         of None():
             mask_src = blank_mask
 
-        # if blend_mode == BlendMode.Pass:
-        #     case mask_src:
-        #     of @Some(mask_val):
-        #         case mask_val
-        #         of @MaskFillTile(fill):
-        #             mask_src = blendfuncs.mul(mask_src, opacity)
-
-    return backdrop
+        if sublayer.blend_mode == BlendMode.Pass:
+            discard
+        else:
+            discard
+    # return backdrop

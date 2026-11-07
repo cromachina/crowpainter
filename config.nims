@@ -2,6 +2,7 @@
 when withDir(thisDir(), system.fileExists("nimble.paths")):
   include "nimble.paths"
 switch("mm", "atomicArc")
+# switch("mm", "boehm")
 switch("d", "ImGuiFileDialogEnable")
 when defined(danger) or defined(release):
     switch("opt", "speed")

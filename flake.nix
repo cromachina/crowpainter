@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-unstable";
+    nixpkgs.url = "nixpkgs/9e3ce346d704337ccc1f55a72bc56ea841d21709";
   };
 
   outputs =

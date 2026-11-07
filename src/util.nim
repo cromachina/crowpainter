@@ -1,10 +1,10 @@
 import parazoa
 import bbtree
 
-import std/options
 import std/strformat
 import std/times
-import fusion/matching
+
+import option
 
 template bin_op*(op: untyped, typ, base: typedesc) =
     func op*(x, y: typ): typ {.borrow.}
@@ -55,23 +55,25 @@ iterator chunks*[T](a: openArray[T], chunk_size: int): tuple[first, last: int] {
         yield (first, min(first + chunk_size, a.len) - 1)
 
 func get_maybe*[K, V](m: Map[K, V], k: K): Option[V] =
-    if m.contains(k): some(m[k]) else: none(V)
+    if m.contains(k): Some(val: m[k]) else: None()
+
+func get_maybe*[K, V](m: Map[K, V], k: Option[K]): Option[V] =
+    case k
+    of Some(val): m.get_maybe(val)
+    of None: None()
 
 func get_or_next*[K, V](m: BBtree[K, V], k: K): Option[V] =
-    case m.get(k):
-    of Some(@val):
-        return some(val)
-    of None():
-        return m.getNext(k)
+    case m.get(k)
+    of Some(val): Some(val: val)
+    of None: m.getNext(k)
 
 func get_or_prev*[K, V](m: BBtree[K, V], k: K): Option[V] =
-    case m.get(k):
-    of Some(@val):
-        return some(val)
-    of None():
-        case m.getPrev(k):
-        of Some(@val):
-            return some(val[1])
+    case m.get(k)
+    of Some(val): Some(val: val)
+    of None:
+        case m.getPrev(k)
+        of Some(val): Some(val: val[1])
+        of None: None()
 
 func new_ref_seq*[T](size: Natural): ref seq[T] =
     new result

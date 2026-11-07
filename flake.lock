@@ -2,15 +2,16 @@
   "nodes": {
     "nixpkgs": {
       "locked": {
-        "lastModified": 1791456040,
-        "narHash": "sha256-gRZ/s8WQJ2CsXdhcDVQH34qxuL0MuMCOs3aBiK1Prsw=",
-        "rev": "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
-        "type": "tarball",
-        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1087755.e7439b6b14ad/nixexprs.tar.zst"
+        "lastModified": 1793786382,
+        "narHash": "sha256-IT4SN7KeZ20SVKS84W8R1GlzvI0+BlAhGn6nM5r3vXU=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "9e3ce346d704337ccc1f55a72bc56ea841d21709",
+        "type": "github"
       },
       "original": {
         "id": "nixpkgs",
-        "ref": "nixos-unstable",
+        "rev": "9e3ce346d704337ccc1f55a72bc56ea841d21709",
         "type": "indirect"
       }
     },

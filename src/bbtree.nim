@@ -45,7 +45,7 @@ Department of Applied Mathematics Charles University in Prague, Czech Republic
 ## * Efficient set operations using tree keys
 ## * Map extensions to set operations with optional value merge control for duplicates
 
-import std/options
+import option
 
 type
     BBTree*[K,V] = ref object   # BBTree is a generic type with keys and values of types K, V
@@ -182,6 +182,7 @@ func add*[K,V](root: BBTree[K,V], key: K, value: V): BBTree[K,V] =
 func get*[K,V](root: BBTree[K,V], key: K): Option[V] =
     ## Retrieves the value for `key` in the tree `root` iff `key` is in the tree.
     ## Otherwise, `default` is returned. O(log N)
+    result = None()
     var node = root
     while (not node.isNil):
         let dif = cmp(key, node.key)
@@ -190,7 +191,7 @@ func get*[K,V](root: BBTree[K,V], key: K): Option[V] =
         elif dif > 0:
             node = node.right
         else: # key and node.key are eq
-            result = some(node.val)
+            result = Some(val: node.val)
             node = nil # break
 
 func getNth*[K,V](root: BBTree[K,V], index: int): Option[(K, V)] =
@@ -198,6 +199,7 @@ func getNth*[K,V](root: BBTree[K,V], index: int): Option[(K, V)] =
     ## positive and less than the tree length. Or get the tree length plus `index` key in
     ## the tree `root` when the `index` is negative and greater than the negative tree length.
     ## Otherwise, `default` is returned. O(log N)
+    result = None()
     let treesize = nodeSize(root)
     var uindex = 0
     var node = root
@@ -214,36 +216,40 @@ func getNth*[K,V](root: BBTree[K,V], index: int): Option[(K, V)] =
                 uindex -= (leftsize + 1)
                 node = node.right
             else: # we are there!
-                result = some((node.key, node.val))
+                result = Some(val: (node.key, node.val))
                 node = nil # break
     # else index is out of range; default is returned
 
 func getMin*[K,V](root: BBTree[K,V]): Option[(K, V)] =
     ## Retrieves the key,value pair with the smallest key in the tree `root`
     ## For an empty tree `default` is returned. O(log N)
+    result = None()
     var node = root
     if not node.isNil:
         while (not node.left.isNil):
             node = node.left;
-        result = some((node.key, node.val))
+        result = Some(val: (node.key, node.val))
 
 func getMax*[K,V](root: BBTree[K,V]): Option[(K, V)] =
     ## Retrieves the key,value pair with the largest key in the tree `root`
     ## For an empty tree `default` is returned. O(log N)
+    result = None()
     var node = root
     if not node.isNil:
         while (not node.right.isNil):
             node = node.right;
-        result = some((node.key, node.val))
+        result = Some(val: (node.key, node.val))
 
 func getKV[K,V](node: BBTree[K,V]): Option[(K, V)] {.inline.} =
+    result = None()
     if not node.isNil:
-        result = some((node.key, node.val))
+        result = Some(val: (node.key, node.val))
 
 func getNext*[K,V](root: BBTree[K,V], key: K): Option[(K,V)] =
     ## Returns the key,value pair with smallest key > `key`.
     ## It is almost inorder successor, but it also works when `key` is not present.
     ## If there is no such successor key in the tree, `default` is returned. O(log N)
+    result = None()
     var last_left_from: BBTree[K,V] = nil
     var node = root
     var done = false
@@ -258,7 +264,7 @@ func getNext*[K,V](root: BBTree[K,V], key: K): Option[(K,V)] =
             elif (dif > 0):
                 node = node.right
             else: # key and node.key are eq
-                # return value from min node of right subtree, or from last_left_from if none
+                # return value from min node of right subtree, or from last_left_from if None()
                 if node.right.isNil:
                     result = getKV(last_left_from)
                 else:
@@ -269,6 +275,7 @@ func getPrev*[K,V](root: BBTree[K,V], key: K): Option[(K,V)] =
     ## Returns the key,value pair with largest key < `key`.
     ## It is almost inorder predecessor, but it also works when `key` is not present.
     ## If there is no such predecessor key in the tree, `default` is returned. O(log N)
+    result = None()
     var last_right_from: BBTree[K,V] = nil
     var node = root
     var done = false
@@ -283,7 +290,7 @@ func getPrev*[K,V](root: BBTree[K,V], key: K): Option[(K,V)] =
                 last_right_from = node
                 node = node.right
             else: # key and node.key are eq
-                # return value from max node of left subtree, or from last_right_from if none
+                # return value from max node of left subtree, or from last_right_from if None()
                 if node.left.isNil:
                     result = getKV(last_right_from)
                 else:
@@ -380,6 +387,7 @@ func delMax*[K,V](root: BBTree[K,V]): BBTree[K,V] =
 func rank*[K,V](root: BBTree[K,V], key: K): Option[int] =
     ## Retrieves the 0-based index of `key` in the tree `root` iff `key` is in the tree.
     ## Otherwise, `default` is returned. O(log N)
+    result = None()
     var n = 0
     var node = root
     while (not node.isNil):
@@ -390,7 +398,7 @@ func rank*[K,V](root: BBTree[K,V], key: K): Option[int] =
             n += 1 + nodeSize(node.left)
             node = node.right
         else: # key and node.key are eq
-            result = some(n + nodeSize(node.left))
+            result = Some(val: n + nodeSize(node.left))
             node = nil # break
 
 #[ **************************** iterators ********************************

@@ -98,13 +98,25 @@ func comp(C, A: int16): int16 =
 func comp2(Cd, Cs, Ad, As: int16): int16 =
     return comp(Cd, As) + comp(Cs, Ad)
 
-func lerp(a, b, t: int16): int16 =
+func fill*(arr: var ColorPixelArray, color: ColorPixel) =
+    for i in 0 ..< TILE_DATA_SIZE:
+        arr[i] = color
+
+func lerp*(a, b, t: int16): int16 =
     return mul(b - a, t) + a
 
-func lerp[T](Cd, Cs: T, val: int16): ColorRgbPixel =
+func lerp*[T](Cd, Cs: T, val: int16): ColorRgbPixel =
     result.r = lerp(Cd.r, Cs.r, val)
     result.g = lerp(Cd.g, Cs.g, val)
     result.b = lerp(Cd.b, Cs.b, val)
+
+func lerp*(a: var ColorArray, b: ColorArray, t: MaskArray) =
+    for i in 0 ..< a.len:
+        convert(a[i], lerp(a[i], b[i], t[i]))
+
+func lerp*(a: var ColorPixelArray, b: ColorPixelArray, t: MaskPixelArray) =
+    for i in 0 ..< TILE_DATA_SIZE:
+        convert(a[i], lerp(a[i], b[i], t[i]))
 
 func blend(Cs, Cd, Asrc, Adst, Aboth, B: int16): int16 =
     return mul(Cs, Asrc) + mul(Cd, Adst) + mul(Aboth, B)
@@ -116,14 +128,6 @@ func alpha_mask_part(Cd, Cs: ColorPixel, mask: MaskPixel): ColorPixel  =
     convert(result, lerp(Cd, Cs, mask))
     result.a = mul(Cs.a, mask)
     result.a = normal_alpha(Cd.a, result.a)
-
-func lerp*(a: var ColorArray, b: ColorArray, t: MaskArray) =
-    for i in 0 ..< a.len:
-        convert(a[i], lerp(a[i], b[i], t[i]))
-
-func lerp*(a: var ColorPixelArray, b: ColorPixelArray, t: MaskPixelArray) =
-    for i in 0 ..< TILE_DATA_SIZE:
-        convert(a[i], lerp(a[i], b[i], t[i]))
 
 template compwise_premul(Cd, Cs, fn: untyped) =
     result.r = fn(Cd.r, Cs.r, Cd.a, Cs.a)

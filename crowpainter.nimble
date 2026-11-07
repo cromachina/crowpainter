@@ -11,8 +11,7 @@ backend       = "cpp"
 
 # Dependencies
 
-requires "nim >= 2.2.12"
-requires "fusion"
+requires "nim >= 2.4.0"
 requires "imguin"
 requires "sdl3_nim"
 requires "parazoa"

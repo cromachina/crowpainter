@@ -17,14 +17,14 @@ import std/times
 import std/typedthreads
 import std/tables
 import std/deques
-import fusion/matching
 
 import blendfuncs
 import canvas_data
-import composite
+# import composite
 import image_io
 import threadpool
 import util
+import option
 
 const scroll_zoom_levels = collect(newSeq):
     for x in countup(-28, 20):
@@ -181,10 +181,10 @@ proc image_rotated(tex_id: GLuint, center, size: Imvec2, angle: float) =
     let
         cos_a = cos(angle)
         sin_a = sin(angle)
-        p0 = center + igImRotate(vec2(-size.x * 0.5, -size.y * 0.5), cos_a, sin_a)
-        p1 = center + igImRotate(vec2(size.x * 0.5, -size.y * 0.5), cos_a, sin_a)
-        p2 = center + igImRotate(vec2(size.x * 0.5, size.y * 0.5), cos_a, sin_a)
-        p3 = center + igImRotate(vec2(-size.x * 0.5, size.y * 0.5), cos_a, sin_a)
+        p0 = center + igImRotate(vec2(-size.x, -size.y) * 0.5, cos_a, sin_a)
+        p1 = center + igImRotate(vec2(size.x, -size.y) * 0.5, cos_a, sin_a)
+        p2 = center + igImRotate(vec2(size.x, size.y) * 0.5, cos_a, sin_a)
+        p3 = center + igImRotate(vec2(-size.x, size.y) * 0.5, cos_a, sin_a)
         uv0 = vec2(0, 0)
         uv1 = vec2(1, 0)
         uv2 = vec2(1, 1)
@@ -192,9 +192,9 @@ proc image_rotated(tex_id: GLuint, center, size: Imvec2, angle: float) =
         drawlist = igGetWindowDrawList()
         tex_ref = ImTextureRef(internal_TexData: nil, internal_TexID: cast[ImTextureID](tex_id))
         pio = igGetPlatformIO_Nil()
-    # ImDrawList_AddCallback(drawlist, canvas_setup_callback, nil, 0)
+    ImDrawList_AddCallback(drawlist, canvas_setup_callback, nil, 0)
     ImDrawList_AddImageQuad(drawlist, tex_ref, p0, p1, p2, p3, uv0, uv1, uv2, uv3, IM_COL32_WHITE)
-    # ImDrawList_AddCallback(drawlist, pio.DrawCallback_ResetRenderState, nil, 0)
+    ImDrawList_AddCallback(drawlist, pio.DrawCallback_ResetRenderState, nil, 0)
 
 proc update_texture(composite_data: CompositeData, pixel_size, composite_tile_size, tile_offset, offset_size: VectorI) =
     glBindTexture(GL_TEXTURE_2D, composite_data.texture)
@@ -211,24 +211,13 @@ proc update_texture(composite_data: CompositeData, pixel_size, composite_tile_si
                         let data_x = tile_x * TILE_SIZE + x
                         let data_i = data_y * pixel_size.x + data_x
                         let i = y * TILE_SIZE + x
-                        # data[data_i].r = to_byte(blendfuncs.range_max)
-                        # data[data_i].g = to_byte(blendfuncs.range_max)
-                        # data[data_i].b = to_byte(blendfuncs.range_max)
-                        # data[data_i].a = to_byte(blendfuncs.range_max)
-                        data[data_i].r = ((tile_y.float / composite_tile_size.y.float) * 255).byte
-                        data[data_i].g = ((i.float / TILE_DATA_SIZE) * 255).byte
-                        data[data_i].b = ((tile_x.float / composite_tile_size.x.float) * 255).byte
-                        data[data_i].a = 255
-                        # data[data_i].r = to_byte(tile[i].r)
-                        # data[data_i].g = to_byte(tile[i].g)
-                        # data[data_i].b = to_byte(tile[i].b)
-                        # data[data_i].a = to_byte(tile[i].a)
+                        convert(data[data_i], tile[i])
         discard glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER)
     else:
         echo "update_texture: NO DATA!"
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pixel_size.x.GLsizei, pixel_size.y.GLsizei, GL_RGBA, GL_UNSIGNED_BYTE, nil)
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
-    #glGenerateMipmap(GL_TEXTURE_2D)
+    glGenerateMipmap(GL_TEXTURE_2D)
 
 proc resize_texture(composite_data: CompositeData, pixel_size: VectorI) =
     glBindTexture(GL_TEXTURE_2D, composite_data.texture)
@@ -236,22 +225,26 @@ proc resize_texture(composite_data: CompositeData, pixel_size: VectorI) =
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, composite_data.pbo)
     glBufferData(GL_PIXEL_UNPACK_BUFFER, pixel_size.x * pixel_size.y * 4, nil, GL_STREAM_DRAW)
 
+func new_layer(canvas: Canvas): Canvas =
+    discard
+
 func new_blank_canvas(size: VectorI): Canvas =
-    var layer: RasterLayer
-    var frame: ColorFrame
-    frame.id = result.next_frame_id
-    frame.temp = new_tile_array[ColorPixelArray](size)
-    layer.id = result.next_layer_id
-    layer.name = fmt"Layer {layer.id.int}"
-    layer.frames = layer.frames.add(0.TimelinePos, frame.id)
+    let frame = ColorFrame(
+        id: result.next_frame_id,
+        data: new_tile_array[ColorPixelArray](size),
+    )
+    var layer = Raster()
+    {.cast(uncheckedAccess).}:
+        layer.id = result.next_layer_id
+        layer.name = fmt"Layer {layer.id.int}"
+        layer.frames = layer.frames.add(0.TimelinePos, frame.id)
     result.size = size
     result.next_frame_id += 1.FrameId
     result.next_layer_id += 1.LayerId
-    result.top_level = result.top_level.add(layer.id)
-    result.frame_lookup = result.frame_lookup.add(frame.id, frame)
+    result.frame_lookup = result.frame_lookup.update(frame.id, frame)
     result.layer_lookup = result.layer_lookup.add(layer.id, layer)
-    result.selected_frame = frame.id
-    result.selected_layer = layer.id
+    result.selected_frame = Some(val: frame.id)
+    result.selected_layer = Some(val: layer.id)
 
 proc new_project(app: App, name: string, pixel_size: VectorI) =
     let canvas = new_blank_canvas(pixel_size)
@@ -263,11 +256,6 @@ proc new_project(app: App, name: string, pixel_size: VectorI) =
     composite.pbo = create_pixel_buffer_object()
     resize_texture(composite, pixel_size)
     let tile_size = get_tiles_size(pixel_size)
-    # var pixels = newSeq[byte](pixel_size.x * pixel_size.y * 4)
-    # for i in 0 ..< pixels.len:
-    #     pixels[i] = 255
-    # glPixelStorei(GL_UNPACK_ROW_LENGTH, 0)
-    # glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pixel_size.x.GLsizei, pixel_size.y.GLsizei, GL_RGBA, GL_UNSIGNED_BYTE, pixels[0].addr)
     update_texture(composite, pixel_size, tile_size, VectorI(x:0, y:0), tile_size - VectorI(x:1, y:1))
     viewport.id = app.next_viewport_id
     project.id = app.next_project_id
@@ -355,14 +343,13 @@ proc main(): void =
     defer: ImGui_ImplOpenGL3_Shutdown()
 
     # Init state
-    var pool = new_thread_pool(true, 2)
+    var pool = new_thread_pool(2)
 
     var app = new App
     var new_canvas_dialog: NewCanvasDialog
     new_canvas_dialog.name = newString(256)
     copy_into(new_canvas_dialog.name, "New Canvas")
-    # new_canvas_dialog.size = VectorI(x:2048, y:2048)
-    new_canvas_dialog.size = VectorI(x:32 * 8, y:32 * 8)
+    new_canvas_dialog.size = VectorI(x:2048, y:2048)
     new_canvas_dialog.background = [1.0, 1.0, 1.0, 1.0]
     var file_dialog = IGFD_Create()
     defer: IGFD_Destroy(file_dialog)
@@ -383,23 +370,23 @@ proc main(): void =
     while running:
         var e: SDL_Event
         while SDL_PollEvent(addr e):
-            if e.type_field.enum_SDL_EventType == SDL_EVENT_QUIT:
+            if e.type_field.SDL_EventType == SDL_EVENT_QUIT:
                 running = false
                 break
             ImGui_ImplSDL3_ProcessEvent(addr e)
-            if io.WantCaptureKeyboard or io.WantCaptureMouse:
-                let etype = e.type_field.SDL_EventType
-                case etype:
-                    of SDL_EVENT_PEN_MOTION:
-                        logger.log(lvlInfo, &"Pen Motion: {e.pmotion}")
-                    of SDL_EVENT_PEN_AXIS:
-                        logger.log(lvlInfo, &"Pen Axis: {e.paxis}")
-                    of SDL_EVENT_PEN_DOWN:
-                        logger.log(lvlInfo, &"Pen Down: {e.ptouch}")
-                    of SDL_EVENT_PEN_UP:
-                        logger.log(lvlInfo, &"Pen Up: {e.ptouch}")
-                    else:
-                        discard
+            # if io.WantCaptureKeyboard or io.WantCaptureMouse:
+            let etype = e.type_field.SDL_EventType
+            case etype:
+                of SDL_EVENT_PEN_MOTION:
+                    logger.log(lvlInfo, &"Pen Motion: {e.pmotion}")
+                of SDL_EVENT_PEN_AXIS:
+                    logger.log(lvlInfo, &"Pen Axis: {e.paxis}")
+                of SDL_EVENT_PEN_DOWN:
+                    logger.log(lvlInfo, &"Pen Down: {e.ptouch}")
+                of SDL_EVENT_PEN_UP:
+                    logger.log(lvlInfo, &"Pen Up: {e.ptouch}")
+                else:
+                    discard
 
         ImGui_Impl_OpenGL3_NewFrame()
         ImGui_ImplSDL3_NewFrame()
@@ -416,7 +403,7 @@ proc main(): void =
                     config.countSelectionMax = 0
                     config.flags = (ImGui_FileDialogFlags_Modal or
                         ImGui_FileDialogFlags_ShowDevicesButton or
-                        ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).int32
+                        ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).ImGuiFileDialogFlags
                     IGFD_OpenDialog(file_dialog,
                         "open_dialog",
                         "Open",
@@ -435,7 +422,7 @@ proc main(): void =
                     config.countSelectionMax = 1
                     config.flags = (ImGui_FileDialogFlags_Modal or
                         ImGui_FileDialogFlags_ShowDevicesButton or
-                        ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).int32
+                        ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).ImGuiFileDialogFlags
                     IGFD_OpenDialog(file_dialog,
                         "save_dialog",
                         "Save",
@@ -475,9 +462,10 @@ proc main(): void =
                         canvas_size = vec2(canvas.size) * scale
                         composite = project.composites.get(project.timeline_pos)
                     # echo fmt"{angle} {offset} {canvas_size}"
-                    case composite:
-                    of Some(@comp):
+                    case composite
+                    of Some(comp):
                         image_rotated(comp.texture, offset, canvas_size, angle)
+                    of None: discard
                 igEnd()
 
         # Dialogs
