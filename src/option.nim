@@ -23,3 +23,7 @@ func is_some*[T](a: Option[T]): bool =
     case a
     of Some: true
     of None: false
+
+func some*[T](val: T): Option[T] =
+    Some(val: val)
+

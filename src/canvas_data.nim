@@ -152,7 +152,7 @@ func get*(canvas: Canvas, id: LayerId): Layer =
 
 func get*(canvas: Canvas, id: Option[LayerId]): Option[Layer] =
     case id
-    of Some(layer_id): Some(val: canvas.get(layer_id))
+    of Some(layer_id): some(canvas.get(layer_id))
     of None: None()
 
 func update*(canvas: var Canvas, layer: Layer) =
@@ -191,7 +191,7 @@ func all_equal*[T](s: array[TILE_DATA_SIZE, T]): bool =
 
 func get_mask_frame*(canvas: Canvas, layer: Layer, timeline_pos: TimelinePos): Option[MaskFrame] =
     case layer.masks.get_or_prev(timeline_pos)
-    of Some(mask_id): Some(val: canvas.mask_frame_lookup.get(mask_id).value)
+    of Some(mask_id): some(canvas.mask_frame_lookup.get(mask_id).value)
     of None: None()
 
 func get_index(row_size: int, tile_index: VectorI): int =
@@ -223,17 +223,17 @@ func update_parent_links*(canvas: Canvas, target_layer_id: LayerId): Canvas =
         case parent_layer
         of Group(_, last_layer, first_layer):
             if target_layer.next_layer.is_none:
-                last_layer = Some(val: target_layer_id)
+                last_layer = some(target_layer_id)
             if target_layer.prev_layer.is_none:
-                first_layer = Some(val: target_layer_id)
+                first_layer = some(target_layer_id)
             result.update(parent_layer)
         else:
             assert(false, "Parent layer cannot be Raster")
     of None:
         if target_layer.next_layer.is_none:
-            result.last_toplevel_layer = Some(val: target_layer_id)
+            result.last_toplevel_layer = some(target_layer_id)
         if target_layer.prev_layer.is_none:
-            result.first_toplevel_layer = Some(val: target_layer_id)
+            result.first_toplevel_layer = some(target_layer_id)
 
 func insert_after*(canvas: Canvas, target_layer_id: LayerId, inserting_layer: Layer): Canvas =
     result = canvas
@@ -242,13 +242,13 @@ func insert_after*(canvas: Canvas, target_layer_id: LayerId, inserting_layer: La
     var maybe_next_layer = result.get(target_layer.next_layer)
     case maybe_next_layer
     of Some(next_layer):
-        next_layer.prev_layer = Some(val: inserting_layer.id)
-        inserting_layer.next_layer = Some(val: next_layer.id)
+        next_layer.prev_layer = some(inserting_layer.id)
+        inserting_layer.next_layer = some(next_layer.id)
         result.update(next_layer)
     of None:
         inserting_layer.next_layer = None()
-    target_layer.next_layer = Some(val: inserting_layer.id)
-    inserting_layer.prev_layer = Some(val: target_layer.id)
+    target_layer.next_layer = some(inserting_layer.id)
+    inserting_layer.prev_layer = some(target_layer.id)
     inserting_layer.parent_layer = target_layer.parent_layer
     result.update(target_layer)
     result.update(inserting_layer)
@@ -261,13 +261,13 @@ func insert_before*(canvas: Canvas, target_layer_id: LayerId, inserting_layer: L
     var maybe_prev_layer = result.get(target_layer.prev_layer)
     case maybe_prev_layer
     of Some(prev_layer):
-        prev_layer.next_layer = Some(val: inserting_layer.id)
-        inserting_layer.prev_layer = Some(val: prev_layer.id)
+        prev_layer.next_layer = some(inserting_layer.id)
+        inserting_layer.prev_layer = some(prev_layer.id)
         result.update(prev_layer)
     of None:
         inserting_layer.prev_layer = None()
-    target_layer.prev_layer = Some(val: inserting_layer.id)
-    inserting_layer.next_layer = Some(val: target_layer.id)
+    target_layer.prev_layer = some(inserting_layer.id)
+    inserting_layer.next_layer = some(target_layer.id)
     inserting_layer.parent_layer = target_layer.parent_layer
     result.update(target_layer)
     result.update(inserting_layer)
@@ -282,10 +282,10 @@ func insert_into_group*(canvas: Canvas, target_layer_id: LayerId, inserting_laye
             result = insert_after(canvas, last_layer, inserting_layer)
         of None:
             result = canvas
-            last_layer = Some(val: inserting_layer.id)
-            first_layer = Some(val: inserting_layer.id)
+            last_layer = some(inserting_layer.id)
+            first_layer = some(inserting_layer.id)
             var inserting_layer = inserting_layer
-            inserting_layer.parent_layer = Some(val: target_layer_id)
+            inserting_layer.parent_layer = some(target_layer_id)
             result.update(target_layer)
             result.update(inserting_layer)
     of Raster:
@@ -314,9 +314,9 @@ func insert_new_to_selected_layer*(canvas: Canvas, inserting_layer: Layer): Canv
             result = insert_after(canvas, last_layer_id, inserting_layer)
         of None:
             result = canvas
-            result.last_toplevel_layer = Some(val: inserting_layer.id)
-            result.first_toplevel_layer = Some(val: inserting_layer.id)
-    result.selected_layer = Some(val: inserting_layer.id)
+            result.last_toplevel_layer = some(inserting_layer.id)
+            result.first_toplevel_layer = some(inserting_layer.id)
+    result.selected_layer = some(inserting_layer.id)
     result.multi_selected_layers.setLen(0)
 
 func move_layers_to_group*(canvas: Canvas, target_layer_id: LayerId): Canvas =
