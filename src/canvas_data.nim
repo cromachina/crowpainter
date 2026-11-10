@@ -2,9 +2,10 @@
 import parazoa
 import bbtree
 
-import util
+import std/algorithm
 import std/math
 
+import util
 import option
 
 def_numerical(LayerId, int)
@@ -87,7 +88,7 @@ type
     Layer* = object
         id* = 0.LayerId
         parent_layer*: Option[LayerId]
-        # Next and prev layers in current group
+        # Next and prev layers in current group, composite order.
         next_layer*: Option[LayerId]
         prev_layer*: Option[LayerId]
         change_id*: uint = 0
@@ -127,60 +128,40 @@ type
     Canvas* = object
         next_layer_id* = 0.LayerId
         next_frame_id* = 0.FrameId
+        # Composite order.
         last_toplevel_layer*: Option[LayerId]
         first_toplevel_layer*: Option[LayerId]
         change_id*: uint = 0
-        # Recursive data is referenced indirectly through IDs instead of refs to simplfy undo states.
+        # Recursive data is referenced indirectly through IDs instead of refs to simplfy immutable undo states.
         layer_lookup*: Map[LayerId, Layer]
-        frame_lookup*: Map[FrameId, RefCounted[ColorFrame]]
-        mask_frame_lookup*: Map[MaskFrameId, RefCounted[MaskFrame]]
+        frame_lookup*: Map[FrameId, ColorFrame]
+        mask_frame_lookup*: Map[MaskFrameId, MaskFrame]
         size*: VectorI
         has_selection*: bool
         selection*: MaskFrame
         background_settings*: BackgroundSettings
         selected_frame*: Option[FrameId]
-        multi_selected_frames*: seq[FrameId]
+        multi_selected_frames*: Set[FrameId]
         selected_layer*: Option[LayerId]
-        multi_selected_layers*: seq[LayerId]
+        multi_selected_layers*: Set[LayerId]
         mask_selected*: bool
         fps: int = 24
         start_frame: int = 0
         end_frame: int = 24
 
 func get*(canvas: Canvas, id: LayerId): Layer =
+    ## Used to retrieve a known layer from layer_lookup.
     canvas.layer_lookup.get(id)
 
 func get*(canvas: Canvas, id: Option[LayerId]): Option[Layer] =
+    ## Used to retrieve layers from links.
     case id
     of Some(layer_id): some(canvas.get(layer_id))
     of None: None()
 
 func update*(canvas: var Canvas, layer: Layer) =
+    ## Convenience function to update a canvas layer reference.
     canvas.layer_lookup = canvas.layer_lookup.add(layer.id, layer)
-
-func update*[K, V](m: Map[K, RefCounted[V]], k: K, v: V): Map[K, RefCounted[V]] =
-    case m.get_maybe(k)
-    of Some(val):
-        var nval = val
-        nval.value = v
-        m.add(k, nval)
-    of None: m.add(k, RefCounted[V](value: v))
-
-func incr_ref*[K, V](m: Map[K, RefCounted[V]], k: K): Map[K, RefCounted[V]] =
-    var val = m.get(k)
-    val.count += 1
-    m.add(k, val)
-
-func decr_ref*[K, V](map: Map[K, RefCounted[V]], k: K): Map[K, RefCounted[V]] =
-    var val = map.get(k)
-    val.count -= 1
-    if val.count <= 0:
-        map.del(k)
-    else:
-        map.add(k, val)
-
-func get_value*[K, V](map: Map[K, RefCounted[V]], k: K): V =
-    map.get(k).value
 
 func all_equal*[T](s: array[TILE_DATA_SIZE, T]): bool =
     let compared = s[0]
@@ -191,7 +172,7 @@ func all_equal*[T](s: array[TILE_DATA_SIZE, T]): bool =
 
 func get_mask_frame*(canvas: Canvas, layer: Layer, timeline_pos: TimelinePos): Option[MaskFrame] =
     case layer.masks.get_or_prev(timeline_pos)
-    of Some(mask_id): some(canvas.mask_frame_lookup.get(mask_id).value)
+    of Some(mask_id): some(canvas.mask_frame_lookup.get(mask_id))
     of None: None()
 
 func get_index(row_size: int, tile_index: VectorI): int =
@@ -214,9 +195,49 @@ func new_tile_array*[T](pixel_size: VectorI): ref seq[T] =
     let tiles = get_tiles_size(pixel_size)
     new_ref_seq[T](tiles.x * tiles.y)
 
-func update_parent_links*(canvas: Canvas, target_layer_id: LayerId): Canvas =
+func get_referenced_layers(canvas: Canvas, layer_id: Option[LayerId]): Set[LayerId] =
+    var layer_id = layer_id
+    while true:
+        case canvas.get(layer_id)
+        of Some(layer):
+            result = result.incl(layer.id)
+            case layer:
+            of Group(_, _, first_layer):
+                result = result.union(get_referenced_layers(canvas, first_layer))
+            of Raster: discard
+            layer_id = layer.next_layer
+        of None:
+            break
+
+func get_referenced_frames(canvas: Canvas): Set[FrameId] =
+    for layer in canvas.layer_lookup.values:
+        case layer
+        of Raster(frames):
+            for (_, frame_id) in frames.inorder:
+                result = result.incl(frame_id)
+        else: discard
+
+func get_referenced_mask_frames(canvas: Canvas): Set[MaskFrameId] =
+    for layer in canvas.layer_lookup.values:
+        for (_, frame_id) in layer.masks.inorder:
+            result = result.incl(frame_id)
+
+func clean_map[K, V](m: Map[K, V], s: Set[K]): Map[K, V] =
+    result = m
+    for key in m.keys:
+        if not s.contains(key):
+            result = result.del(key)
+
+func cleanup_references(canvas: Canvas): Canvas =
     result = canvas
-    var target_layer = result.get(target_layer_id)
+    result.layer_lookup = clean_map(result.layer_lookup, get_referenced_layers(result, result.first_toplevel_layer))
+    result.frame_lookup = clean_map(result.frame_lookup, get_referenced_frames(result))
+    result.mask_frame_lookup = clean_map(result.mask_frame_lookup, get_referenced_mask_frames(result))
+
+func update_parent_links*(canvas: Canvas, target_layer_id: LayerId): Canvas =
+    ## Update the parent Group's links to its first and last children of the given child layer.
+    result = canvas
+    let target_layer = result.get(target_layer_id)
     var maybe_parent = result.get(target_layer.parent_layer)
     case maybe_parent
     of Some(parent_layer):
@@ -236,6 +257,7 @@ func update_parent_links*(canvas: Canvas, target_layer_id: LayerId): Canvas =
             result.first_toplevel_layer = some(target_layer_id)
 
 func insert_after*(canvas: Canvas, target_layer_id: LayerId, inserting_layer: Layer): Canvas =
+    ## Insert a layer after the target layer.
     result = canvas
     var inserting_layer = inserting_layer
     var target_layer = result.get(target_layer_id)
@@ -255,6 +277,7 @@ func insert_after*(canvas: Canvas, target_layer_id: LayerId, inserting_layer: La
     return update_parent_links(result, inserting_layer.id)
 
 func insert_before*(canvas: Canvas, target_layer_id: LayerId, inserting_layer: Layer): Canvas =
+    ## Insert a layer before the target layer.
     result = canvas
     var inserting_layer = inserting_layer
     var target_layer = result.get(target_layer_id)
@@ -274,14 +297,15 @@ func insert_before*(canvas: Canvas, target_layer_id: LayerId, inserting_layer: L
     return update_parent_links(result, inserting_layer.id)
 
 func insert_into_group*(canvas: Canvas, target_layer_id: LayerId, inserting_layer: Layer): Canvas =
-    var target_layer = canvas.get(target_layer_id)
+    ## Insert a layer into the target group in the last position.
+    result = canvas
+    var target_layer = result.get(target_layer_id)
     case target_layer
     of Group(_, last_layer, first_layer):
         case last_layer
         of Some(last_layer):
-            result = insert_after(canvas, last_layer, inserting_layer)
+            result = insert_after(result, last_layer, inserting_layer)
         of None:
-            result = canvas
             last_layer = some(inserting_layer.id)
             first_layer = some(inserting_layer.id)
             var inserting_layer = inserting_layer
@@ -297,27 +321,99 @@ func insert_new_to_selected_layer*(canvas: Canvas, inserting_layer: Layer): Canv
     ## If the selected layer is a group, then it is placed at the last position (top).
     ## If the selected layer is a raster, then it is placed after the selected layer.
     ## The inserted layer becomes the new selected layer.
-    case canvas.selected_layer
+    result = canvas
+    case result.selected_layer
     of Some(selected_layer_id):
-        var selected_layer = canvas.get(selected_layer_id)
-        case selected_layer
-        of Group():
-            result = insert_into_group(canvas, selected_layer_id, inserting_layer)
-        of Raster():
-            result = insert_after(canvas, selected_layer_id, inserting_layer)
+        case result.get(selected_layer_id)
+        of Group:
+            result = insert_into_group(result, selected_layer_id, inserting_layer)
+        of Raster:
+            result = insert_after(result, selected_layer_id, inserting_layer)
     # In the "no selection" case, there are also no layers.
     of None:
         case result.last_toplevel_layer
         # Something weird happened, there is no selection but layers do exist.
         # Try to insert after the last layer.
         of Some(last_layer_id):
-            result = insert_after(canvas, last_layer_id, inserting_layer)
+            result = insert_after(result, last_layer_id, inserting_layer)
         of None:
-            result = canvas
             result.last_toplevel_layer = some(inserting_layer.id)
             result.first_toplevel_layer = some(inserting_layer.id)
     result.selected_layer = some(inserting_layer.id)
-    result.multi_selected_layers.setLen(0)
+    result.multi_selected_layers = parazoa.toSet([inserting_layer.id])
+
+func unlink_layer*(canvas: Canvas, target_layer_id: LayerId): Canvas =
+    # Removes the linkage of a layer from other layers.
+    result = canvas
+    var layer = result.get(target_layer_id)
+    var maybe_next = result.get(layer.next_layer)
+    case maybe_next
+    of Some(next_layer):
+        next_layer.prev_layer = layer.prev_layer
+        result.update(next_layer)
+    of None:
+        var maybe_parent = result.get(layer.parent_layer)
+        case maybe_parent
+        of Some(parent):
+            case parent
+            of Group(_, last_layer):
+                last_layer = layer.prev_layer
+                result.update(parent)
+            else: discard
+        of None:
+            result.last_toplevel_layer = layer.prev_layer
+
+    var maybe_prev = result.get(layer.prev_layer)
+    case maybe_prev
+    of Some(prev_layer):
+        prev_layer.next_layer = layer.next_layer
+        result.update(prev_layer)
+    of None:
+        var maybe_parent = result.get(layer.parent_layer)
+        case maybe_parent
+        of Some(parent):
+            case parent
+            of Group(_, _, first_layer):
+                first_layer = layer.next_layer
+                result.update(parent)
+            else: discard
+        of None:
+            result.first_toplevel_layer = layer.next_layer
+
+func find_selected_ancenstor*(canvas: Canvas, target_layer_id: LayerId): LayerId =
+    result = target_layer_id
+    while true:
+        var layer = canvas.get(result)
+        var maybe_parent = canvas.get(layer.parent_layer)
+        case maybe_parent
+        of Some(parent):
+            if parent.id in canvas.multi_selected_layers:
+                result = parent.id
+        of None:
+            break
+
+func filter_highest_selected*(canvas: Canvas): Set[LayerId] =
+    for layer_id in canvas.multi_selected_layers:
+        result = result.incl(find_selected_ancenstor(canvas, layer_id))
+
+func sort_layer_set*(canvas: Canvas, layers: Set[LayerId]): Vec[LayerId] =
+    discard
+
+func get_next_available_selection*(canvas: Canvas): Option[LayerId] =
+    discard
+
+func delete_layers*(canvas: Canvas): Canvas =
+    # Unlink all selected layers and cleanup references.
+    result = canvas
+    let next_selection = get_next_available_selection(result)
+    for layer in result.multi_selected_layers:
+        result = unlink_layer(result, layer)
+    result.selected_layer = next_selection
+    case next_selection
+    of Some(next_selection):
+        result.multi_selected_layers = parazoa.toSet([next_selection])
+    of None: discard
+    return cleanup_references(result)
 
 func move_layers_to_group*(canvas: Canvas, target_layer_id: LayerId): Canvas =
     ## Move the current selection into a target group.

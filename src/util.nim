@@ -100,6 +100,17 @@ proc timer*(time: var float, str: string) =
 template to_oa*(a: untyped, args: tuple[first: int, last: int]): untyped =
     a.toOpenArray(args.first, args.last)
 
+# Fix for parazoa function
+func union*[T](s1: Set[T], s2: Set[T]): Set[T] =
+  var res = s1
+  for k in s2.items:
+    res = res.incl(k)
+  res
+
+func to_seq*[T](s: Set[T]): seq[T] =
+    for v in s:
+        result.add(v)
+
 type
     Vector*[T] = object
         x*, y*: T

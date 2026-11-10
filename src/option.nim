@@ -26,4 +26,3 @@ func is_some*[T](a: Option[T]): bool =
 
 func some*[T](val: T): Option[T] =
     Some(val: val)
-

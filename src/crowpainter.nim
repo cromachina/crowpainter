@@ -241,10 +241,10 @@ func new_blank_canvas(size: VectorI): Canvas =
     result.size = size
     result.next_frame_id += 1.FrameId
     result.next_layer_id += 1.LayerId
-    result.frame_lookup = result.frame_lookup.update(frame.id, frame)
+    result.frame_lookup = result.frame_lookup.add(frame.id, frame)
     result.layer_lookup = result.layer_lookup.add(layer.id, layer)
     result.selected_frame = Some(val: frame.id)
-    result.selected_layer = Some(val: layer.id)
+    return insert_new_to_selected_layer(result, layer)
 
 proc new_project(app: App, name: string, pixel_size: VectorI) =
     let canvas = new_blank_canvas(pixel_size)
