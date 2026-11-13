@@ -4,6 +4,7 @@ import bbtree
 
 import std/algorithm
 import std/math
+import std/sugar
 
 import util
 import option
@@ -85,6 +86,13 @@ type
         tiles*: Map[VectorI, MaskTile]
         data*: ref seq[MaskPixelArray]
 
+    GroupObj* = object
+        group_open*: bool = true
+        last_layer*: Option[LayerId]
+        first_layer*: Option[LayerId]
+        # Temp buffer for compositing.
+        temp*: ref seq[ColorPixelArray]
+
     Layer* = object
         id* = 0.LayerId
         parent_layer*: Option[LayerId]
@@ -107,11 +115,7 @@ type
         of Raster:
             frames*: BBTree[TimelinePos, FrameId]
         of Group:
-            group_open*: bool = true
-            last_layer*: Option[LayerId]
-            first_layer*: Option[LayerId]
-            # Temp buffer for compositing.
-            temp*: ref seq[ColorPixelArray]
+            group*: GroupObj
 
     BackgroundSettings* = object
         color*: ColorPixel
@@ -119,18 +123,12 @@ type
         checker*: bool = true
         checker_brightness*: uint8 = 127
 
-    # When frames are used as clones, keeping track of ref counts
-    # will help clean them up from the lookup tables when they are deleted.
-    RefCounted*[T] = object
-        count*: int = 1
-        value*: T
-
     Canvas* = object
         next_layer_id* = 0.LayerId
         next_frame_id* = 0.FrameId
         # Composite order.
-        last_toplevel_layer*: Option[LayerId]
         first_toplevel_layer*: Option[LayerId]
+        last_toplevel_layer*: Option[LayerId]
         change_id*: uint = 0
         # Recursive data is referenced indirectly through IDs instead of refs to simplfy immutable undo states.
         layer_lookup*: Map[LayerId, Layer]
@@ -202,8 +200,8 @@ func get_referenced_layers(canvas: Canvas, layer_id: Option[LayerId]): Set[Layer
         of Some(layer):
             result = result.incl(layer.id)
             case layer:
-            of Group(_, _, first_layer):
-                result = result.union(get_referenced_layers(canvas, first_layer))
+            of Group(group):
+                result = result.union(get_referenced_layers(canvas, group.first_layer))
             of Raster: discard
             layer_id = layer.next_layer
         of None:
@@ -242,11 +240,11 @@ func update_parent_links*(canvas: Canvas, target_layer_id: LayerId): Canvas =
     case maybe_parent
     of Some(parent_layer):
         case parent_layer
-        of Group(_, last_layer, first_layer):
+        of Group(group):
             if target_layer.next_layer.is_none:
-                last_layer = some(target_layer_id)
+                group.last_layer = some(target_layer_id)
             if target_layer.prev_layer.is_none:
-                first_layer = some(target_layer_id)
+                group.first_layer = some(target_layer_id)
             result.update(parent_layer)
         else:
             assert(false, "Parent layer cannot be Raster")
@@ -301,13 +299,13 @@ func insert_into_group*(canvas: Canvas, target_layer_id: LayerId, inserting_laye
     result = canvas
     var target_layer = result.get(target_layer_id)
     case target_layer
-    of Group(_, last_layer, first_layer):
-        case last_layer
+    of Group(group):
+        case group.last_layer
         of Some(last_layer):
             result = insert_after(result, last_layer, inserting_layer)
         of None:
-            last_layer = some(inserting_layer.id)
-            first_layer = some(inserting_layer.id)
+            group.last_layer = some(inserting_layer.id)
+            group.first_layer = some(inserting_layer.id)
             var inserting_layer = inserting_layer
             inserting_layer.parent_layer = some(target_layer_id)
             result.update(target_layer)
@@ -356,8 +354,8 @@ func unlink_layer*(canvas: Canvas, target_layer_id: LayerId): Canvas =
         case maybe_parent
         of Some(parent):
             case parent
-            of Group(_, last_layer):
-                last_layer = layer.prev_layer
+            of Group(group):
+                group.last_layer = layer.prev_layer
                 result.update(parent)
             else: discard
         of None:
@@ -373,8 +371,8 @@ func unlink_layer*(canvas: Canvas, target_layer_id: LayerId): Canvas =
         case maybe_parent
         of Some(parent):
             case parent
-            of Group(_, _, first_layer):
-                first_layer = layer.next_layer
+            of Group(group):
+                group.first_layer = layer.next_layer
                 result.update(parent)
             else: discard
         of None:
@@ -396,17 +394,42 @@ func filter_highest_selected*(canvas: Canvas): Set[LayerId] =
     for layer_id in canvas.multi_selected_layers:
         result = result.incl(find_selected_ancenstor(canvas, layer_id))
 
-func sort_layer_set*(canvas: Canvas, layers: Set[LayerId]): Vec[LayerId] =
-    discard
+func sort_sub(canvas: Canvas, layers: Set[LayerId], current_layer: Option[LayerId]): Vec[LayerId] =
+    var current_layer = current_layer
+    while true:
+        case canvas.get(current_layer)
+        of Some(layer):
+            if layer.id in layers:
+                result = result.add(layer.id)
+            else:
+                case layer
+                of Group(group):
+                    result.add(sort_sub(canvas, layers, group.first_layer))
+                of Raster: discard
+            current_layer = layer.next_layer
+        of None:
+            break
 
-func get_next_available_selection*(canvas: Canvas): Option[LayerId] =
-    discard
+func sorted_selection*(canvas: Canvas): Vec[LayerId] =
+    sort_sub(canvas, filter_highest_selected(canvas), canvas.first_toplevel_layer)
+
+func get_next_available_selection*(canvas: Canvas, layers: Vec[LayerId]): Option[LayerId] =
+    if layers.len == 0:
+        return None()
+    let last = canvas.get(layers.get(layers.len - 1))
+    let first = canvas.get(layers.get(0))
+    if last.next_layer.is_some:
+        return last.next_layer
+    if first.prev_layer.is_some:
+        return first.prev_layer
+    return last.parent_layer
 
 func delete_layers*(canvas: Canvas): Canvas =
     # Unlink all selected layers and cleanup references.
     result = canvas
-    let next_selection = get_next_available_selection(result)
-    for layer in result.multi_selected_layers:
+    let sorted_layers = sorted_selection(result)
+    let next_selection = get_next_available_selection(result, sorted_layers)
+    for layer in sorted_layers:
         result = unlink_layer(result, layer)
     result.selected_layer = next_selection
     case next_selection
@@ -415,14 +438,22 @@ func delete_layers*(canvas: Canvas): Canvas =
     of None: discard
     return cleanup_references(result)
 
+func move_layers*(canvas: Canvas, target_layer_id: LayerId, insert_op: ((Canvas, LayerId, Layer) {.noSideEffect.} -> Canvas)): Canvas =
+    result = canvas
+    let sorted_layers = sorted_selection(result)
+    for layer_id in sorted_layers:
+        let layer = result.get(layer_id)
+        result = unlink_layer(result, layer_id)
+        result = insert_op(result, target_layer_id, layer)
+
 func move_layers_to_group*(canvas: Canvas, target_layer_id: LayerId): Canvas =
     ## Move the current selection into a target group.
-    discard
+    move_layers(canvas, target_layer_id, insert_into_group)
 
 func move_layers_after*(canvas: Canvas, target_layer_id: LayerId): Canvas =
     ## Move the current selection to after the target layer.
-    discard
+    move_layers(canvas, target_layer_id, insert_after)
 
 func move_layers_before*(canvas: Canvas, target_layer_id: LayerId): Canvas =
     ## Move the current selection to before the target layer.
-    discard
+    move_layers(canvas, target_layer_id, insert_before)
