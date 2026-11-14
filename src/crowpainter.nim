@@ -37,7 +37,8 @@ type
 
     DynamicsProperty = object
         enabled: bool
-        curve: seq[VectorF]
+        ## Ordered control points by X to Y
+        curve: BBTree[float, float]
 
     DynamicsProperties = object
         value: int
@@ -70,35 +71,55 @@ type
         current: BrushProperties
         default: BrushProperties
 
+    ## Composited canvas image data and associated UI handles.
     CompositeData = object
         composite: ref seq[ColorPixelArray]
         texture: GLuint
         pbo: GLuint
 
+    ## Describes the display of a canvas.
     Viewport = ref object
-        id: int
+        id: uint
         position: ImVec2
         zoom_level: int = default_zoom_level
         rotation: float = 0
         last_mouse_pos: ImVec2
         panning: bool = false
 
+    ## Maintains the canvas states and UI views.
     Project = ref object
-        id: int
+        id: uint
         file_path: Path
         saved_to_disk: bool = false
         states: Vec[Canvas]
-        current_id:int = 0
-        next_id: int = 1
-        saved_id: int = -1
+        current_id: uint = 0
+        next_id: uint = 1
+        saved_id: Option[uint]
         composites: BBtree[TimelinePos, CompositeData]
-        viewports: OrderedTable[int, Viewport]
+        viewports: OrderedTable[uint, Viewport]
         timeline_pos = 0.TimelinePos
+        layer_list: LayerListWidget
+
+    # Because the canvas state is immutable some of it has to be duplicated in the UI.
+    LayerWidget = object
+        visible: bool
+        name: string
+        blend_mode: BlendMode
+        opacity: float
+        alpha_lock: bool
+        draw_lock: bool
+        move_lock: bool
+        all_lock: bool
+        clipping: bool
+
+    LayerListWidget = object
+        layers = newTable[LayerId, LayerWidget]()
+        selection: ImGuiSelectionBasicStorage
 
     App = ref object
-        next_project_id: int = 0
-        next_viewport_id: int = 0
-        projects: OrderedTable[int, Project]
+        next_project_id: uint = 0
+        next_viewport_id: uint = 0
+        projects = newOrderedTable[uint, Project]()
         recent_projects: Deque[Path]
         active_project: Project
         active_tool: Tool
@@ -133,6 +154,7 @@ proc check_sdl(result: bool): void =
     if not result:
         quit(&"SDL Error: {SDL_GetError()}", -1)
 
+# TODO: Not correct for actual 2D tile layouts; Only linearly converts to tiles.
 proc parellel_convert[A, B](pool: ThreadPool, res: ref seq[A], data: ref seq[B]) =
     var futures = newSeq[Future]()
     when A is ColorPixelArray and B is util.Color[byte]:
@@ -225,26 +247,19 @@ proc resize_texture(composite_data: CompositeData, pixel_size: VectorI) =
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, composite_data.pbo)
     glBufferData(GL_PIXEL_UNPACK_BUFFER, pixel_size.x * pixel_size.y * 4, nil, GL_STREAM_DRAW)
 
-func new_layer(canvas: Canvas): Canvas =
-    discard
+func get_current_canvas(project: Project): Canvas =
+    project.states[project.current_id]
 
-func new_blank_canvas(size: VectorI): Canvas =
-    let frame = ColorFrame(
-        id: result.next_frame_id,
-        data: new_tile_array[ColorPixelArray](size),
-    )
-    var layer = Raster()
-    {.cast(uncheckedAccess).}:
-        layer.id = result.next_layer_id
-        layer.name = fmt"Layer {layer.id.int}"
-        layer.frames = layer.frames.add(0.TimelinePos, frame.id)
-    result.size = size
-    result.next_frame_id += 1.FrameId
-    result.next_layer_id += 1.LayerId
-    result.frame_lookup = result.frame_lookup.add(frame.id, frame)
-    result.layer_lookup = result.layer_lookup.add(layer.id, layer)
-    result.selected_frame = Some(val: frame.id)
-    return insert_new_to_selected_layer(result, layer)
+func rebuild_layer_list(project: Project) =
+    project.layer_list.layers.clear()
+    let canvas = project.get_current_canvas()
+    for layer in canvas.layer_lookup.values:
+        project.layer_list.layers[layer.id] = LayerWidget(
+            name: layer.name,
+            visible: layer.visible,
+            blend_mode: layer.blend_mode,
+            opacity: opacity_to_view(layer.opacity),
+        )
 
 proc new_project(app: App, name: string, pixel_size: VectorI) =
     let canvas = new_blank_canvas(pixel_size)
@@ -266,6 +281,29 @@ proc new_project(app: App, name: string, pixel_size: VectorI) =
     project.viewports[viewport.id] = viewport
     project.composites = project.composites.add(0.TimelinePos, composite)
     app.projects[project.id] = project
+    app.active_project = project
+    project.rebuild_layer_list()
+
+func push_state(project: Project, canvas: Canvas) =
+    var canvas = canvas
+    canvas.change_id = project.next_id
+    project.next_id += 1
+    project.current_id = canvas.change_id
+    project.states = project.states.add(canvas)
+
+func add_new_layer(app: App) =
+    var project = app.active_project
+    if project.isNil:
+        return
+    project.push_state(new_layer(project.get_current_canvas()))
+    project.rebuild_layer_list()
+
+func add_new_group(app: App) =
+    var project = app.active_project
+    if project.isNil:
+        return
+    project.push_state(new_group(project.get_current_canvas()))
+    project.rebuild_layer_list()
 
 proc handle_new_canvas_dialog(app: App, dialog: var NewCanvasDialog) =
     let id = "New Canvas"
@@ -282,15 +320,44 @@ proc handle_new_canvas_dialog(app: App, dialog: var NewCanvasDialog) =
         igBeginGroup()
         if igButton("OK", vec2(0, 0)):
             igCloseCurrentPopup()
-            new_project(app, dialog.name, dialog.size)
+            app.new_project(dialog.name, dialog.size)
         igSameLine(0, 10)
         if igButton("Cancel", vec2(0, 0)):
             igCloseCurrentPopup()
         igEndGroup()
         igEndPopup()
 
-proc show_viewport(viewport: Viewport) =
+proc draw_viewport(viewport: Viewport) =
     discard
+
+proc draw_layer(project: Project, layer_id: LayerId) =
+    let canvas = project.states.get(project.current_id)
+    let layer = canvas.get(layer_id)
+    var layer_widget = project.layer_list.layers[layer_id]
+    let id = fmt"{project.id}-{layer.id.int}"
+    var flags = (ImGui_TreeNodeFlags_SpanAvailWidth or ImGui_TreeNodeFlags_OpenOnArrow)
+    if not is_group(layer):
+        flags = flags or ImGui_TreeNodeFlags_Leaf
+    if igTreeNodeEx_Str(fmt"###layer-node-{id}".cstring, flags.ImGuiTreeNodeFlags):
+        if igCheckbox(fmt"###layer-visible-{id}".cstring, layer_widget.visible.addr):
+            discard
+        igSameLine(0, 10)
+        igBeginGroup()
+        igText(layer_widget.name.cstring)
+        igText(get_blend_mode_name(layer_widget.blend_mode).cstring)
+        igText(fmt"{layer_widget.opacity.int}%%".cstring)
+        igEndGroup()
+        case layer
+        of Group(group):
+            for layer in reverse_group_layers_iter(canvas, group):
+                draw_layer(project, layer.id)
+        else: discard
+        igTreePop()
+
+proc draw_layers(project: Project) =
+    let canvas = project.states.get(project.current_id)
+    for layer in reverse_group_layers_iter(canvas):
+        draw_layer(project, layer.id)
 
 func make_filter(filter: tuple[name:string, exts:seq[string]]): string =
     let
@@ -357,7 +424,7 @@ proc main(): void =
 
     canvas_sampler = create_sampler()
 
-    new_project(app, new_canvas_dialog.name, new_canvas_dialog.size)
+    app.new_project(new_canvas_dialog.name, new_canvas_dialog.size)
 
     # var image = image_io.load[ImageRgba]("fg.png")
     # var canvas_texture = create_texture()
@@ -454,7 +521,7 @@ proc main(): void =
             for viewport in project.viewports.mvalues:
                 if igBegin((fmt"{project.file_path}###viewport-{viewport.id}").cstring, nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
                     let
-                        canvas = project.states[project.current_id]
+                        canvas = project.get_current_canvas()
                         win_center = igGetWindowPos() + igGetWindowSize() * 0.5
                         scale = 1.0
                         angle = viewport.rotation
@@ -467,6 +534,15 @@ proc main(): void =
                         image_rotated(comp.texture, offset, canvas_size, angle)
                     of None: discard
                 igEnd()
+
+        # Layer List
+        if igBegin("Layers", nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
+            if igBeginChild_Str("##layers-scroll", vec2(200, 600), (ImGui_ChildFlags_FrameStyle or ImGui_ChildFlags_ResizeY).ImGuiChildFlags, ImGui_WindowFlags_None.ImGuiWindowFlags):
+                let project = app.active_project
+                if not project.isNil:
+                    draw_layers(project)
+            igEndChild()
+        igEnd()
 
         # Dialogs
         if IGFD_DisplayDialog(file_dialog, "open_dialog", ImGui_WindowFlags_NoCollapse.ImGuiWindowFlags, vec2(500, 400), vec2(10000, 10000)):

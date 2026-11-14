@@ -79,6 +79,9 @@ func newNode[K,V](left: BBTree[K,V], key: K, value: V, right: BBTree[K,V]): BBTr
     let size = nodeSize(left) + 1 + nodeSize(right)
     result = BBTree[K,V](left: left, right: right, size: size, key: key, val: value)
 
+func singleton*[K,V](key: K, value: V): BBTree[K,V] =
+    newLeaf(key, value)
+
 #[ **************************** balance ********************************
 #
 singleL l k (Node rl _ rk rr) = node (node l k rl) rk rr

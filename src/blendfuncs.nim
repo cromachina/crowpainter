@@ -1,8 +1,9 @@
 import std/math
 
-import canvas_data
 import util
 
+const TILE_SIZE* = 32
+const TILE_DATA_SIZE* = TILE_SIZE * TILE_SIZE
 const range_max*:int16 = 0x3fff
 const range_half:int16 = range_max div 2
 const range_quarter:int16 = range_max div 4
@@ -14,11 +15,75 @@ const gamma_r:int16 = int16(range_max.float32 * 0.30)
 const gamma_g:int16 = int16(range_max.float32 * 0.59)
 const gamma_b:int16 = int16(range_max.float32 * 0.11)
 
+type
+    BlendMode* {.pure.} = enum
+        Pass,
+        Normal,
+        Multiply,
+        Screen,
+        Overlay,
+        LinearBurn,
+        LinearDodge,
+        LinearLight,
+        ColorBurn,
+        ColorDodge,
+        VividLight,
+        SoftLight,
+        HardLight,
+        PinLight,
+        HardMix,
+        Darken,
+        Lighten,
+        DarkenColor,
+        LightenColor,
+        Difference,
+        Exclude,
+        Subtract,
+        Divide,
+        Hue,
+        Saturation,
+        Color,
+        Luminosity,
+        TsLinearBurn,
+        TsLinearDodge,
+        TsLinearLight,
+        TsColorBurn,
+        TsColorDodge,
+        TsVividLight,
+        TsHardMix,
+        TsDifference,
+
+    ColorPixelArray* = array[TILE_DATA_SIZE, ColorPixel]
+    MaskPixelArray* = array[TILE_DATA_SIZE, MaskPixel]
+
 func make_sqrt_lut(): array[range_max + 1, int16] =
     for i in 0 ..< len(result):
         result[i.int16] = (sqrt(i.float / range_max.float) * range_max.float).int16
 
 const sqrt_lut = make_sqrt_lut()
+
+func opacity_to_view*(opacity: int16): float =
+    opacity.float / range_max.float * 100
+
+func view_to_opacity*(view: int): float =
+    (view.float / 100) * range_max.float
+
+func get_linear_index*(row_size: int, tile_index: VectorI): int =
+    tile_index.y * row_size + tile_index.x
+
+func get_tiles_size*(pixel_width: int): int =
+    let (res, rem) = divmod(pixel_width, TILE_SIZE)
+    if rem > 0: res + 1 else: res
+
+func get_tiles_size*(pixel_size: VectorI): VectorI =
+    VectorI(x:get_tiles_size(pixel_size.x), y:get_tiles_size(pixel_size.y))
+
+func get_pixels_size*(tile_size: VectorI): VectorI =
+    tile_size * TILE_SIZE
+
+func new_tile_array*[T](pixel_size: VectorI): ref seq[T] =
+    let tiles = get_tiles_size(pixel_size)
+    new_ref_seq[T](tiles.x * tiles.y)
 
 func to_int16*(data: byte): int16 =
     ((data.int16 shl 6) or (data.int16 shr 2))
