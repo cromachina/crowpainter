@@ -26,6 +26,7 @@
           pkg-config
           nim
           nimble
+          gdb
         ];
       };
     };
