@@ -87,10 +87,17 @@ func new_ref*[T](s: T): ref T =
     new result
     result[] = s
 
-func `or`*(a, b: enum): typeof(a) =
-  when typeof(a) isnot typeof(b):
-    {.warning: "Bitwise `or` is unsafe for different enum types".}
-  typeof(a)(ord(a) or ord(b))
+func uord(a: enum): cuint =
+    cast[cuint](ord(a))
+
+func `or`*(a, b: enum): cuint =
+    uord(a) or uord(b)
+
+func `or`*(a: enum, b: cuint): cuint =
+    uord(a) or b
+
+func `or`*(a: cuint, b: enum): cuint =
+   a or uord(b)
 
 proc timer*(time: var float, str: string) =
     let next = epochTime()
