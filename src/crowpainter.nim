@@ -19,7 +19,7 @@ import std/tables
 import std/deques
 
 import blendfuncs
-import canvas_data
+import canvas
 # import composite
 import image_io
 import threadpool

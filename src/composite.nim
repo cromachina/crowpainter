@@ -4,7 +4,7 @@ import std/algorithm
 import parazoa
 
 import util
-import canvas_data
+import canvas
 import blendfuncs
 import option
 
