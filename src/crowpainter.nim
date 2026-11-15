@@ -86,22 +86,8 @@ type
         last_mouse_pos: ImVec2
         panning: bool = false
 
-    ## Maintains the canvas states and UI views.
-    Project = ref object
-        id: uint
-        file_path: Path
-        saved_to_disk: bool = false
-        states: Vec[Canvas]
-        current_id: uint = 0
-        next_id: uint = 1
-        saved_id: Option[uint]
-        composites: BBtree[TimelinePos, CompositeData]
-        viewports: OrderedTable[uint, Viewport]
-        timeline_pos = 0.TimelinePos
-        layer_list: LayerListWidget
-
     # Because the canvas state is immutable some of it has to be duplicated in the UI.
-    LayerWidget = object
+    LayerItemData = object
         visible: bool
         name: string
         blend_mode: BlendMode
@@ -112,11 +98,32 @@ type
         all_lock: bool
         clipping: bool
 
-    LayerListWidget = object
-        layers = newTable[LayerId, LayerWidget]()
+    LayerListData = object
+        layers = newTable[LayerId, LayerItemData]()
         selection: ImGuiSelectionBasicStorage
 
+    ## Maintains the canvas states and UI views.
+    Project = ref object
+        id: uint
+        file_path: Path
+        saved_to_disk: bool = false
+        states: Deque[Canvas]
+        current_index: uint = 0
+        next_id: uint = 1
+        saved_id: Option[uint]
+        composites: BBtree[TimelinePos, CompositeData]
+        viewports: OrderedTable[uint, Viewport]
+        timeline_pos = 0.TimelinePos
+        layer_list: LayerListData
+
+    NewCanvasDialog = object
+        show: bool
+        name: string
+        size: VectorI
+        background: array[4, cfloat]
+
     App = ref object
+        running = true
         next_project_id: uint = 0
         next_viewport_id: uint = 0
         projects = newOrderedTable[uint, Project]()
@@ -126,12 +133,9 @@ type
         brush_fg_color: ColorRgbBytePixel
         brush_bg_color: ColorRgbBytePixel
         brush_transparency: bool
-
-    NewCanvasDialog = object
-        show: bool
-        name: string
-        size: VectorI
-        background: array[4, cfloat]
+        new_canvas_dialog: NewCanvasDialog
+        file_dialog: ptr ImGuiFileDialog
+        last_dir = "."
 
 func vec2(x, y: float): ImVec2 =
     ImVec2(x:x, y:y)
@@ -149,6 +153,29 @@ func `*`(a: ImVec2, b: float): ImVec2 =
     vec2(a.x * b, a.y * b)
 
 const IM_COL32_WHITE = 0xffffffff.ImU32
+
+func make_filter(filter: tuple[name:string, exts:seq[string]]): string =
+    let
+        dotted = filter.exts.map((e) => "." & e)
+        exts_reg = join(dotted, ",")
+        exts_label = join(dotted, " ")
+    return fmt"{filter.name} ({exts_label}){{{exts_reg}}}"
+
+func make_all_filter(file_filters: seq[tuple[name:string, exts:seq[string]]]): string =
+    let exts = file_filters.map((f) => f.exts).concat().map((e) => "." & e).join(",")
+    return fmt"Image files (*){{{exts}}}"
+
+const file_filters = @[
+    ("Crowpainter", @["crow"]),
+    ("PNG", @["png"]),
+    ("JPEG", @["jpg", "jpeg"]),
+    ("Photoshop", @["psd", "psb"]),
+    ("Targa", @["tga"]),
+    ("Bitmap", @["bmp"]),
+]
+
+const save_filters = file_filters.map(make_filter).join(",")
+const open_filters = fmt"{make_all_filter(file_filters)},{save_filters}"
 
 proc check_sdl(result: bool): void =
     if not result:
@@ -248,13 +275,26 @@ proc resize_texture(composite_data: CompositeData, pixel_size: VectorI) =
     glBufferData(GL_PIXEL_UNPACK_BUFFER, pixel_size.x * pixel_size.y * 4, nil, GL_STREAM_DRAW)
 
 func get_current_canvas(project: Project): Canvas =
-    project.states[project.current_id]
+    project.states[project.current_index]
+
+func is_saved(project: Project): bool =
+    project.saved_id == some(project.get_current_canvas().change_id)
+
+func push_canvas(project: Project, canvas: Canvas) =
+    var canvas = canvas
+    canvas.change_id = project.next_id
+    project.next_id += 1
+    project.states.addLast(canvas)
+    project.current_index = project.states.len().uint - 1
+
+func replace_current_canvas(project: Project, canvas: Canvas) =
+    project.states[project.current_index] = canvas
 
 func rebuild_layer_list(project: Project) =
     project.layer_list.layers.clear()
     let canvas = project.get_current_canvas()
     for layer in canvas.layer_lookup.values:
-        project.layer_list.layers[layer.id] = LayerWidget(
+        project.layer_list.layers[layer.id] = LayerItemData(
             name: layer.name,
             visible: layer.visible,
             blend_mode: layer.blend_mode,
@@ -277,110 +317,198 @@ proc new_project(app: App, name: string, pixel_size: VectorI) =
     app.next_viewport_id += 1
     app.next_project_id += 1
     project.file_path = Path(name)
-    project.states = project.states.add(canvas)
+    project.push_canvas(canvas)
     project.viewports[viewport.id] = viewport
     project.composites = project.composites.add(0.TimelinePos, composite)
     app.projects[project.id] = project
     app.active_project = project
     project.rebuild_layer_list()
 
-func push_state(project: Project, canvas: Canvas) =
-    var canvas = canvas
-    canvas.change_id = project.next_id
-    project.next_id += 1
-    project.current_id = canvas.change_id
-    project.states = project.states.add(canvas)
-
 func add_new_layer(app: App) =
     var project = app.active_project
     if project.isNil:
         return
-    project.push_state(new_layer(project.get_current_canvas()))
+    project.push_canvas(new_layer(project.get_current_canvas()))
     project.rebuild_layer_list()
 
 func add_new_group(app: App) =
     var project = app.active_project
     if project.isNil:
         return
-    project.push_state(new_group(project.get_current_canvas()))
+    project.push_canvas(new_group(project.get_current_canvas()))
     project.rebuild_layer_list()
 
-proc handle_new_canvas_dialog(app: App, dialog: var NewCanvasDialog) =
-    let id = "New Canvas"
-    if dialog.show:
+proc draw_open_dialog(app: App) =
+    if IGFD_DisplayDialog(app.file_dialog, "open-dialog", ImGui_WindowFlags_NoCollapse.ImGuiWindowFlags, vec2(500, 400), vec2(10000, 10000)):
+        defer: IGFD_CloseDialog(app.file_dialog)
+        if IGFD_IsOk(app.file_dialog):
+            var sel = IGFD_GetSelection(app.file_dialog, IGFD_ResultMode_AddIfNoFileExt.IGFD_ResultMode)
+            defer: IGFD_Selection_DestroyContent(sel.addr)
+            let table = cast[ptr UncheckedArray[IGFD_Selection_Pair]](sel.table)
+            for i in 0 ..< sel.count:
+                echo fmt"{table[i].fileName}; {table[i].filePathName}"
+
+proc draw_save_dialog(app: App) =
+    if IGFD_DisplayDialog(app.file_dialog, "save-dialog", ImGui_WindowFlags_NoCollapse.ImGuiWindowFlags, vec2(500, 400), vec2(10000, 10000)):
+        defer: IGFD_CloseDialog(app.file_dialog)
+        if IGFD_IsOk(app.file_dialog):
+            var file_name: cstring
+            file_name = IGFD_GetFilePathName(app.file_dialog, IGFD_ResultMode_AddIfNoFileExt.IGFD_ResultMode)
+            echo file_name
+
+proc draw_new_canvas_dialog(app: App) =
+    let id = "New Canvas###new-canvas-dialog"
+    if app.new_canvas_dialog.show:
         igOpenPopup_Str(id.cstring, ImGui_PopupFlags_None.ImGuiPopupFlags)
-        dialog.show = false
+        app.new_canvas_dialog.show = false
     var center = igGetMainViewport().ImGuiViewport_GetCenter()
     igSetNextWindowPos(center, ImGui_Cond_Appearing.ImGuiCond, vec2(0.5, 0.5))
-    if igBeginPopupModal(id.cstring, nil, ImGui_WindowFlags_AlwaysAutoResize.ImGuiWindowFlags):
-        igInputText("File Name", dialog.name.cstring, dialog.name.len().csize_t, ImGui_InputTextFlags_None.ImGuiInputTextFlags, nil, nil)
-        igInputInt("Width", cast[ptr cint](dialog.size.x.addr), 10, 100, ImGui_InputTextFlags_CharsDecimal.ImGuiInputTextFlags)
-        igInputInt("Height", cast[ptr cint](dialog.size.y.addr), 10, 100, ImGui_InputTextFlags_CharsDecimal.ImGuiInputTextFlags)
-        igColorEdit4("Background", dialog.background, ImGui_ColorEditFlags_NoInputs.ImGuiColorEditFlags)
+    if igBeginPopupModal(id.cstring, nil, (ImGui_WindowFlags_AlwaysAutoResize).ImGuiWindowFlags):
+        igInputText("File Name", app.new_canvas_dialog.name.cstring, app.new_canvas_dialog.name.len().csize_t, ImGui_InputTextFlags_None.ImGuiInputTextFlags, nil, nil)
+        igInputInt("Width", cast[ptr cint](app.new_canvas_dialog.size.x.addr), 10, 100, ImGui_InputTextFlags_CharsDecimal.ImGuiInputTextFlags)
+        igInputInt("Height", cast[ptr cint](app.new_canvas_dialog.size.y.addr), 10, 100, ImGui_InputTextFlags_CharsDecimal.ImGuiInputTextFlags)
+        igColorEdit4("Background", app.new_canvas_dialog.background, ImGui_ColorEditFlags_NoInputs.ImGuiColorEditFlags)
         igBeginGroup()
         if igButton("OK", vec2(0, 0)):
             igCloseCurrentPopup()
-            app.new_project(dialog.name, dialog.size)
+            app.new_project(app.new_canvas_dialog.name, app.new_canvas_dialog.size)
         igSameLine(0, 10)
         if igButton("Cancel", vec2(0, 0)):
             igCloseCurrentPopup()
         igEndGroup()
+        var window = igGetCurrentWindow()
         igEndPopup()
 
-proc draw_viewport(viewport: Viewport) =
-    discard
+proc draw_viewport(app: App, project: Project, viewport: Viewport) =
+    if igBegin(fmt"{project.file_path}###viewport-{viewport.id}".cstring, nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
+        let
+            canvas = project.get_current_canvas()
+            win_center = igGetWindowPos() + igGetWindowSize() * 0.5
+            scale = 1.0
+            angle = viewport.rotation
+            offset = win_center + viewport.position
+            canvas_size = vec2(canvas.size) * scale
+            composite = project.composites.get(project.timeline_pos)
+        # echo fmt"{angle} {offset} {canvas_size}"
+        case composite
+        of Some(comp):
+            image_rotated(comp.texture, offset, canvas_size, angle)
+        of None: discard
+    igEnd()
 
-proc draw_layer(project: Project, layer_id: LayerId) =
-    let canvas = project.states.get(project.current_id)
+proc draw_viewports(app: App) =
+    for project in app.projects.mvalues:
+        for viewport in project.viewports.mvalues:
+            app.draw_viewport(project, viewport)
+
+proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
+    let canvas = project.get_current_canvas()
     let layer = canvas.get(layer_id)
     var layer_widget = project.layer_list.layers[layer_id]
-    let id = fmt"{project.id}-{layer.id.int}"
-    var flags = (ImGui_TreeNodeFlags_SpanAvailWidth or ImGui_TreeNodeFlags_OpenOnArrow)
+    let id = layer.id.int
+    var flags = ImGui_TreeNodeFlags_AllowOverlap or
+        ImGui_TreeNodeFlags_Framed or
+        ImGui_TreeNodeFlags_DefaultOpen or
+        ImGui_TreeNodeFlags_SpanAvailWidth or
+        ImGui_TreeNodeFlags_OpenOnArrow
     if not is_group(layer):
         flags = flags or ImGui_TreeNodeFlags_Leaf
-    if igTreeNodeEx_Str(fmt"###layer-node-{id}".cstring, flags.ImGuiTreeNodeFlags):
-        if igCheckbox(fmt"###layer-visible-{id}".cstring, layer_widget.visible.addr):
-            discard
-        igSameLine(0, 10)
-        igBeginGroup()
-        igText(layer_widget.name.cstring)
-        igText(get_blend_mode_name(layer_widget.blend_mode).cstring)
-        igText(fmt"{layer_widget.opacity.int}%%".cstring)
-        igEndGroup()
-        case layer
-        of Group(group):
+    igPushStyleVar_Vec2(ImGui_StyleVar_FramePadding.ImguiStyleVar, vec2(0, 20))
+    let node_id = fmt"###layer-node-{id}".cstring
+    let opened = igTreeNodeEx_Str(node_id, flags.ImGuiTreeNodeFlags)
+    igPopStyleVar(1)
+    if igIsItemHovered(ImGui_HoveredFlags_None.ImguiHoveredFlags) and igIsMouseDoubleClicked_Nil(ImGui_MouseButton_Left.ImguiMouseButton):
+        debugEcho &"double clicked {layer.name}"
+    igSameLine(0, 0)
+    if igCheckbox(fmt"###layer-visible-{id}".cstring, layer_widget.visible.addr):
+        discard
+    igSameLine(0, 10)
+    igBeginGroup()
+    igSetCursorPosY(igGetCursorPosY() - 18)
+    igText(layer_widget.name.cstring)
+    igText(get_blend_mode_name(layer_widget.blend_mode).cstring)
+    igText(fmt"{layer_widget.opacity.int}%%".cstring)
+    igEndGroup()
+    case layer
+    of Group(group):
+        if opened:
             for layer in reverse_group_layers_iter(canvas, group):
-                draw_layer(project, layer.id)
-        else: discard
+                draw_layer_item(app, project, layer.id)
+    else: discard
+    if opened:
         igTreePop()
 
-proc draw_layers(project: Project) =
-    let canvas = project.states.get(project.current_id)
-    for layer in reverse_group_layers_iter(canvas):
-        draw_layer(project, layer.id)
+proc draw_layers_list(app: App) =
+    if igBegin("Layers", nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
+        let project = app.active_project
+        if not project.isNil:
+            let canvas = project.get_current_canvas()
+            for layer in reverse_group_layers_iter(canvas):
+                draw_layer_item(app, project, layer.id)
+    igEnd()
 
-func make_filter(filter: tuple[name:string, exts:seq[string]]): string =
-    let
-        dotted = filter.exts.map((e) => "." & e)
-        exts_reg = join(dotted, ",")
-        exts_label = join(dotted, " ")
-    return fmt"{filter.name} ({exts_label}){{{exts_reg}}}"
+proc draw_menu_bar(app: App) =
+    if igBeginMainMenuBar():
+        if igBeginMenu("File", true):
+            var want_save_as = false
+            if igMenuItem_Bool("New ...", nil, false, true):
+                app.new_canvas_dialog.show = true
+            if igMenuItem_Bool("Open ...", nil, false, true):
+                var config = IGFD_FileDialog_Config_Get()
+                config.path = app.last_dir.cstring
+                config.countSelectionMax = 0
+                config.flags = (ImGui_FileDialogFlags_Modal or
+                    ImGui_FileDialogFlags_ShowDevicesButton or
+                    ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).ImGuiFileDialogFlags
+                IGFD_OpenDialog(app.file_dialog,
+                    "open_dialog",
+                    "Open",
+                    open_filters,
+                    config)
+            # TODO Check if there is something in the clipboard to enable or disable this:
+            if igMenuItem_Bool("New from Clipboard ...", nil, false, true):
+                discard
+            if igMenuItem_Bool("Save ...", nil, false, true):
+                # TODO Check if current viewport.canvas has a save path
+                # Save if it does else run save dialog.
+                want_save_as = true
+            if igMenuItem_Bool("Save As...", nil, false, true) or want_save_as:
+                var config = IGFD_FileDialog_Config_Get()
+                config.path = app.last_dir.cstring
+                config.countSelectionMax = 1
+                config.flags = (ImGui_FileDialogFlags_Modal or
+                    ImGui_FileDialogFlags_ShowDevicesButton or
+                    ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).ImGuiFileDialogFlags
+                IGFD_OpenDialog(app.file_dialog,
+                    "save_dialog",
+                    "Save",
+                    save_filters,
+                    config)
+            if igMenuItem_Bool("Close ...", nil, false, true):
+                discard
+            if igMenuItem_Bool("Exit ...", nil, false, true):
+                app.running = false
+            igEndMenu()
+        if igBeginMenu("Edit", true):
+            igEndMenu()
+        if igBeginMenu("Canvas", true):
+            igEndMenu()
+        if igBeginMenu("Layer", true):
+            igEndMenu()
+        if igBeginMenu("Selection", true):
+            igEndMenu()
+        if igBeginMenu("View", true):
+            igEndMenu()
+        if igBeginMenu("Window", true):
+            igEndMenu()
+        igEndMainMenuBar()
 
-func make_all_filter(file_filters: seq[tuple[name:string, exts:seq[string]]]): string =
-    let exts = file_filters.map((f) => f.exts).concat().map((e) => "." & e).join(",")
-    return fmt"Image files (*){{{exts}}}"
+proc `=destroy`(app: var typeof(App()[])) =
+    IGFD_Destroy(app.file_dialog)
 
-const file_filters = @[
-    ("Crowpainter", @["crow"]),
-    ("PNG", @["png"]),
-    ("JPEG", @["jpg", "jpeg"]),
-    ("Photoshop", @["psd", "psb"]),
-    ("Targa", @["tga"]),
-    ("Bitmap", @["bmp"]),
-]
-
-const save_filters = file_filters.map(make_filter).join(",")
-const open_filters = fmt"{make_all_filter(file_filters)},{save_filters}"
+proc new_app(): App =
+    result.new
+    result.file_dialog = IGFD_Create()
 
 proc main(): void =
     # Initialize SDL
@@ -412,19 +540,15 @@ proc main(): void =
     # Init state
     var pool = new_thread_pool(2)
 
-    var app = new App
-    var new_canvas_dialog: NewCanvasDialog
-    new_canvas_dialog.name = newString(256)
-    copy_into(new_canvas_dialog.name, "New Canvas")
-    new_canvas_dialog.size = VectorI(x:2048, y:2048)
-    new_canvas_dialog.background = [1.0, 1.0, 1.0, 1.0]
-    var file_dialog = IGFD_Create()
-    defer: IGFD_Destroy(file_dialog)
-    var last_dir = "."
+    var app = new_app()
+    app.new_canvas_dialog.name = newString(256)
+    copy_into(app.new_canvas_dialog.name, "New Canvas")
+    app.new_canvas_dialog.size = VectorI(x:2048, y:2048)
+    app.new_canvas_dialog.background = [1.0, 1.0, 1.0, 1.0]
 
     canvas_sampler = create_sampler()
 
-    app.new_project(new_canvas_dialog.name, new_canvas_dialog.size)
+    app.new_project(app.new_canvas_dialog.name, app.new_canvas_dialog.size)
 
     # var image = image_io.load[ImageRgba]("fg.png")
     # var canvas_texture = create_texture()
@@ -433,12 +557,11 @@ proc main(): void =
     # glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA.GLint, image.size.x.GLsizei, image.size.y.GLsizei, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.data[0].addr)
     # glGenerateMipmap(GL_TEXTURE_2D)
 
-    var running = true
-    while running:
+    while app.running:
         var e: SDL_Event
         while SDL_PollEvent(addr e):
             if e.type_field.SDL_EventType == SDL_EVENT_QUIT:
-                running = false
+                app.running = false
                 break
             ImGui_ImplSDL3_ProcessEvent(addr e)
             # if io.WantCaptureKeyboard or io.WantCaptureMouse:
@@ -459,109 +582,14 @@ proc main(): void =
         ImGui_ImplSDL3_NewFrame()
         igNewFrame()
 
-        if igBeginMainMenuBar():
-            if igBeginMenu("File", true):
-                var want_save_as = false
-                if igMenuItem_Bool("New ...", nil, false, true):
-                    new_canvas_dialog.show = true
-                if igMenuItem_Bool("Open ...", nil, false, true):
-                    var config = IGFD_FileDialog_Config_Get()
-                    config.path = last_dir.cstring
-                    config.countSelectionMax = 0
-                    config.flags = (ImGui_FileDialogFlags_Modal or
-                        ImGui_FileDialogFlags_ShowDevicesButton or
-                        ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).ImGuiFileDialogFlags
-                    IGFD_OpenDialog(file_dialog,
-                        "open_dialog",
-                        "Open",
-                        open_filters,
-                        config)
-                # TODO Check if there is something in the clipboard to enable or disable this:
-                if igMenuItem_Bool("New from Clipboard ...", nil, false, true):
-                    discard
-                if igMenuItem_Bool("Save ...", nil, false, true):
-                    # TODO Check if current viewport.canvas has a save path
-                    # Save if it does else run save dialog.
-                    want_save_as = true
-                if igMenuItem_Bool("Save As...", nil, false, true) or want_save_as:
-                    var config = IGFD_FileDialog_Config_Get()
-                    config.path = last_dir.cstring
-                    config.countSelectionMax = 1
-                    config.flags = (ImGui_FileDialogFlags_Modal or
-                        ImGui_FileDialogFlags_ShowDevicesButton or
-                        ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).ImGuiFileDialogFlags
-                    IGFD_OpenDialog(file_dialog,
-                        "save_dialog",
-                        "Save",
-                        save_filters,
-                        config)
-                if igMenuItem_Bool("Close ...", nil, false, true):
-                    discard
-                if igMenuItem_Bool("Exit ...", nil, false, true):
-                    running = false
-                igEndMenu()
-            if igBeginMenu("Edit", true):
-                igEndMenu()
-            if igBeginMenu("Canvas", true):
-                igEndMenu()
-            if igBeginMenu("Layer", true):
-                igEndMenu()
-            if igBeginMenu("Selection", true):
-                igEndMenu()
-            if igBeginMenu("View", true):
-                igEndMenu()
-            if igBeginMenu("Window", true):
-                igEndMenu()
-            igEndMainMenuBar()
-
         igDockSpaceOverViewport(igGetID_Str("Main Dockspace"), igGetMainViewport(), (ImGui_DockNodeFlags_PassthruCentralNode).ImGuiDockNodeFlags, ImGuiWindowClass_ImGuiWindowClass())
 
-        # Viewports
-        for project in app.projects.mvalues:
-            for viewport in project.viewports.mvalues:
-                if igBegin((fmt"{project.file_path}###viewport-{viewport.id}").cstring, nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
-                    let
-                        canvas = project.get_current_canvas()
-                        win_center = igGetWindowPos() + igGetWindowSize() * 0.5
-                        scale = 1.0
-                        angle = viewport.rotation
-                        offset = win_center + viewport.position
-                        canvas_size = vec2(canvas.size) * scale
-                        composite = project.composites.get(project.timeline_pos)
-                    # echo fmt"{angle} {offset} {canvas_size}"
-                    case composite
-                    of Some(comp):
-                        image_rotated(comp.texture, offset, canvas_size, angle)
-                    of None: discard
-                igEnd()
-
-        # Layer List
-        if igBegin("Layers", nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
-            if igBeginChild_Str("##layers-scroll", vec2(200, 600), (ImGui_ChildFlags_FrameStyle or ImGui_ChildFlags_ResizeY).ImGuiChildFlags, ImGui_WindowFlags_None.ImGuiWindowFlags):
-                let project = app.active_project
-                if not project.isNil:
-                    draw_layers(project)
-            igEndChild()
-        igEnd()
-
-        # Dialogs
-        if IGFD_DisplayDialog(file_dialog, "open_dialog", ImGui_WindowFlags_NoCollapse.ImGuiWindowFlags, vec2(500, 400), vec2(10000, 10000)):
-            defer: IGFD_CloseDialog(file_dialog)
-            if IGFD_IsOk(file_dialog):
-                var sel = IGFD_GetSelection(file_dialog, IGFD_ResultMode_AddIfNoFileExt.IGFD_ResultMode)
-                defer: IGFD_Selection_DestroyContent(sel.addr)
-                let table = cast[ptr UncheckedArray[IGFD_Selection_Pair]](sel.table)
-                for i in 0 ..< sel.count:
-                    echo fmt"{table[i].fileName}; {table[i].filePathName}"
-
-        if IGFD_DisplayDialog(file_dialog, "save_dialog", ImGui_WindowFlags_NoCollapse.ImGuiWindowFlags, vec2(500, 400), vec2(10000, 10000)):
-            defer: IGFD_CloseDialog(file_dialog)
-            if IGFD_IsOk(file_dialog):
-                var file_name: cstring
-                file_name = IGFD_GetFilePathName(file_dialog, IGFD_ResultMode_AddIfNoFileExt.IGFD_ResultMode)
-                echo file_name
-
-        handle_new_canvas_dialog(app, new_canvas_dialog)
+        app.draw_menu_bar()
+        app.draw_viewports()
+        app.draw_layers_list()
+        app.draw_new_canvas_dialog()
+        app.draw_open_dialog()
+        app.draw_save_dialog()
 
         igRender()
         glViewport(0, 0, io.DisplaySize.x.GLsizei, io.DisplaySize.y.GLsizei)
