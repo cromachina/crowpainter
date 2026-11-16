@@ -12,8 +12,11 @@ import util
 import option
 import blendfuncs
 
-def_numerical(LayerId, int)
 def_numerical(FrameId, int)
+def_numerical(LayerId, int)
+def_numerical(FrameChangeId, int)
+def_numerical(LayerChangeId, int)
+def_numerical(CanvasChangeId, int)
 def_numerical(MaskFrameId, int)
 def_numerical(TimelinePos, int)
 
@@ -30,7 +33,7 @@ type
 
     Frame* = object of RootObj
         id* = 0.FrameId
-        change_id*: uint = 0
+        change_id* = 0.FrameChangeId
         change_map*: Map[VectorI, uint]
         offset*: VectorI
         pixel_size*: VectorI
@@ -59,7 +62,7 @@ type
         # Next and prev layers in current group, composite order.
         next_layer*: Option[LayerId]
         prev_layer*: Option[LayerId]
-        change_id*: uint = 0
+        change_id* = 0.LayerChangeId
         name*: string = ""
         blend_mode* = BlendMode.Normal
         opacity*: int16 = range_max
@@ -77,19 +80,13 @@ type
         of Group:
             group*: GroupObj
 
-    BackgroundSettings* = object
-        color*: ColorPixel
-        transparent*: bool = false
-        checker*: bool = true
-        checker_brightness*: uint8 = 127
-
     Canvas* = object
         next_layer_id* = 0.LayerId
         next_frame_id* = 0.FrameId
         # Composite order.
         first_layer*: Option[LayerId]
         last_layer*: Option[LayerId]
-        change_id*: uint = 0
+        change_id* = 0.CanvasChangeId
         # Recursive data is referenced indirectly through IDs instead of refs to simplfy immutable undo states.
         layer_lookup*: Map[LayerId, Layer]
         frame_lookup*: Map[FrameId, ColorFrame]
@@ -97,15 +94,16 @@ type
         size*: VectorI
         has_selection*: bool
         selection*: MaskFrame
-        background_settings*: BackgroundSettings
+        background_color*: ColorRgbPixel
+        background_transparent*: bool = false
         selected_frame*: Option[FrameId]
         multi_selected_frames*: Set[FrameId]
         selected_layer*: Option[LayerId]
         multi_selected_layers*: Set[LayerId]
         mask_selected*: bool
-        fps: int = 24
-        start_frame: int = 0
-        end_frame: int = 24
+        fps*: int = 24
+        start_frame* = 0.TimelinePos
+        end_frame* = 24.TimelinePos
 
 func get_blend_mode_name*(blend_mode: BlendMode): string =
     case blend_mode

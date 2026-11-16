@@ -17,6 +17,7 @@ import std/times
 import std/typedthreads
 import std/tables
 import std/deques
+import std/sets
 
 import blendfuncs
 import canvas
@@ -30,6 +31,9 @@ const scroll_zoom_levels = collect(newSeq):
     for x in countup(-28, 20):
         2.0 ^ (x.float / 4)
 const default_zoom_level:int = 28
+
+def_numerical(ViewportId, int)
+def_numerical(ProjectId, int)
 
 type
     Tool = ref object of RootObj
@@ -72,20 +76,16 @@ type
         default: BrushProperties
 
     ## Composited canvas image data and associated UI handles.
-    CompositeData = object
+    CompositeData = ref object
         composite: ref seq[ColorPixelArray]
         texture: GLuint
         pbo: GLuint
 
-    ## Describes the display of a canvas.
-    Viewport = ref object
-        id: uint
-        position: ImVec2
-        zoom_level: int = default_zoom_level
-        rotation: float = 0
-        last_mouse_pos: ImVec2
-        panning: bool = false
+proc `=destroy`(composite: type(CompositeData()[])) =
+    glDeleteTextures(1, composite.texture.addr)
+    glDeleteBuffers(1, composite.pbo.addr)
 
+type
     # Because the canvas state is immutable some of it has to be duplicated in the UI.
     LayerItemData = object
         visible: bool
@@ -104,29 +104,42 @@ type
 
     ## Maintains the canvas states and UI views.
     Project = ref object
-        id: uint
+        id: ProjectId
         file_path: Path
         saved_to_disk: bool = false
         states: Deque[Canvas]
-        current_index: uint = 0
-        next_id: uint = 1
-        saved_id: Option[uint]
+        current_index: int = 0
+        next_id = 0.CanvasChangeId
+        saved_id: Option[CanvasChangeId]
         composites: BBtree[TimelinePos, CompositeData]
-        viewports: OrderedTable[uint, Viewport]
+        viewports: HashSet[ViewportId]
         timeline_pos = 0.TimelinePos
         layer_list: LayerListData
+
+    ## Describes the display of a canvas.
+    Viewport = ref object
+        id: ViewportId
+        project_id: ProjectId
+        position: ImVec2
+        zoom_level: int = default_zoom_level
+        rotation: float = 0
+        last_brush_pos: ImVec2
+        panning: bool = false
+        is_open: bool = true
 
     NewCanvasDialog = object
         show: bool
         name: string
         size: VectorI
-        background: array[4, cfloat]
+        background_color: array[3, cfloat]
+        background_transparent: bool
 
     App = ref object
         running = true
-        next_project_id: uint = 0
-        next_viewport_id: uint = 0
-        projects = newOrderedTable[uint, Project]()
+        next_project_id = 0.ProjectId
+        next_viewport_id = 0.ViewportId
+        projects = newOrderedTable[ProjectId, Project]()
+        viewports = newOrderedTable[ViewportId, Viewport]()
         recent_projects: Deque[Path]
         active_project: Project
         active_tool: Tool
@@ -136,6 +149,12 @@ type
         new_canvas_dialog: NewCanvasDialog
         file_dialog: ptr ImGuiFileDialog
         last_dir = "."
+        checker_texture: GLuint
+        checker_sampler: GLuint
+        canvas_sampler: GLuint
+
+func `$`(v: ImVec2): string =
+    &"{{{v.x}, {v.y}}}"
 
 func vec2(x, y: float): ImVec2 =
     ImVec2(x:x, y:y)
@@ -151,6 +170,9 @@ func `+`(a, b: ImVec2): ImVec2 =
 
 func `*`(a: ImVec2, b: float): ImVec2 =
     vec2(a.x * b, a.y * b)
+
+func `*`(a: ImVec2, b: ImVec2): ImVec2 =
+    vec2(a.x * b.x, a.y * b.y)
 
 const IM_COL32_WHITE = 0xffffffff.ImU32
 
@@ -210,23 +232,81 @@ proc create_pixel_buffer_object(): GLuint =
     glGenBuffers(1, pbo.addr)
     return pbo
 
-proc create_sampler(): GLuint =
+proc create_checker_sampler(): GLuint =
+    var sampler: GLuint
+    glGenSamplers(1, sampler.addr)
+    # glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    # glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+    glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_REPEAT)
+    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_REPEAT)
+    glSamplerParameterf(sampler, GL_TEXTURE_LOD_BIAS, -0.5)
+    return sampler
+
+proc create_canvas_sampler(): GLuint =
     var sampler: GLuint
     glGenSamplers(1, sampler.addr)
     glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
-    glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
     glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
     glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
     glSamplerParameterf(sampler, GL_TEXTURE_LOD_BIAS, -0.5)
     return sampler
 
-var canvas_sampler: GLuint
-proc canvas_setup_callback(a0: ptr ImDrawList, a1: ptr ImDrawCmd): void {.cdecl.} =
-    glBindSampler(0, canvas_sampler)
+const CHECKER_SIZE = 32
+
+proc set_checker_texture(texture: GLuint, color1, color2: uint8) =
+    let size = CHECKER_SIZE
+    var data: seq[ColorBytePixel]
+    data.setLen(size * size * 4)
+    let color1 = ColorBytePixel(r: color1, g: color1, b: color1, a: 255)
+    let color2 = ColorBytePixel(r: color2, g: color2, b: color2, a: 255)
+    let j = size * size * 2
+    let sizex = size * 2
+    for y in 0 ..< size:
+        for x in 0 ..< size:
+            let i = y * sizex + x
+            data[i] = color1
+            data[i + size] = color2
+            data[j + i] = color2
+            data[j + i + size] = color1
+    glBindTexture(GL_TEXTURE_2D, texture)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB.GLint, (size * 2).GLsizei, (size * 2).GLsizei, 0, GL_RGBA, GL_UNSIGNED_BYTE, data[0].addr)
+    glGenerateMipmap(GL_TEXTURE_2D)
+
+proc set_checker_texture(texture: GLuint, color1, color2: float) =
+    set_checker_texture(texture, (color1 * 255).uint8, (color2 * 255).uint8)
+
+proc checker_setup_callback(drawlist: ptr ImDrawList, drawcmd: ptr ImDrawCmd): void {.cdecl.} =
+    var app = cast[ptr App](drawcmd.UserCallbackData)
+    glBindSampler(0, app[].checker_sampler)
+
+proc canvas_setup_callback(drawlist: ptr ImDrawList, drawcmd: ptr ImDrawCmd): void {.cdecl.} =
+    var app = cast[ptr App](drawcmd.UserCallbackData)
+    glBindSampler(0, app[].canvas_sampler)
+
+func to_ImTextureRef(texture: GLuint): ImTextureRef =
+    ImTextureRef(internal_TexData: nil, internal_TexID: cast[ImTextureID](texture))
+
+proc draw_checker_quad(drawlist: ptr ImDrawList, texture: ImTextureRef, center, size: Imvec2, angle: float) =
+    let
+        checker_size = 1 / CHECKER_SIZE
+        cos_a = cos(angle)
+        sin_a = sin(angle)
+        p0 = center + igImRotate(vec2(-size.x, -size.y) * 0.5, cos_a, sin_a)
+        p1 = center + igImRotate(vec2(size.x, -size.y) * 0.5, cos_a, sin_a)
+        p2 = center + igImRotate(vec2(size.x, size.y) * 0.5, cos_a, sin_a)
+        p3 = center + igImRotate(vec2(-size.x, size.y) * 0.5, cos_a, sin_a)
+        uv0 = vec2(0, 0)
+        uv1 = vec2(1, 0) * size * checker_size
+        uv2 = vec2(1, 1) * size * checker_size
+        uv3 = vec2(0, 1) * size * checker_size
+    ImDrawList_AddImageQuad(drawlist, texture, p0, p1, p2, p3, uv0, uv1, uv2, uv3, IM_COL32_WHITE)
 
 # Rotated quad:
 # https://github.com/ocornut/imgui/issues/1982#issuecomment-408834301
-proc image_rotated(tex_id: GLuint, center, size: Imvec2, angle: float) =
+proc draw_quad(drawlist: ptr ImDrawList, texture: ImTextureRef, center, size: Imvec2, angle: float) =
     let
         cos_a = cos(angle)
         sin_a = sin(angle)
@@ -238,12 +318,7 @@ proc image_rotated(tex_id: GLuint, center, size: Imvec2, angle: float) =
         uv1 = vec2(1, 0)
         uv2 = vec2(1, 1)
         uv3 = vec2(0, 1)
-        drawlist = igGetWindowDrawList()
-        tex_ref = ImTextureRef(internal_TexData: nil, internal_TexID: cast[ImTextureID](tex_id))
-        pio = igGetPlatformIO_Nil()
-    ImDrawList_AddCallback(drawlist, canvas_setup_callback, nil, 0)
-    ImDrawList_AddImageQuad(drawlist, tex_ref, p0, p1, p2, p3, uv0, uv1, uv2, uv3, IM_COL32_WHITE)
-    ImDrawList_AddCallback(drawlist, pio.DrawCallback_ResetRenderState, nil, 0)
+    ImDrawList_AddImageQuad(drawlist, texture, p0, p1, p2, p3, uv0, uv1, uv2, uv3, IM_COL32_WHITE)
 
 proc update_texture(composite_data: CompositeData, pixel_size, composite_tile_size, tile_offset, offset_size: VectorI) =
     glBindTexture(GL_TEXTURE_2D, composite_data.texture)
@@ -256,8 +331,12 @@ proc update_texture(composite_data: CompositeData, pixel_size, composite_tile_si
                 let tile = composite_data.composite[tile_i]
                 for y in 0 ..< TILE_SIZE:
                     let data_y = tile_y * TILE_SIZE + y
+                    if data_y >= pixel_size.y:
+                        continue
                     for x in 0 ..< TILE_SIZE:
                         let data_x = tile_x * TILE_SIZE + x
+                        if data_x >= pixel_size.x:
+                            break
                         let data_i = data_y * pixel_size.x + data_x
                         let i = y * TILE_SIZE + x
                         convert(data[data_i], tile[i])
@@ -280,12 +359,21 @@ func get_current_canvas(project: Project): Canvas =
 func is_saved(project: Project): bool =
     project.saved_id == some(project.get_current_canvas().change_id)
 
-func push_canvas(project: Project, canvas: Canvas) =
+func set_saved(project: Project) =
+    project.saved_id = some(project.get_current_canvas().change_id)
+
+func push_canvas(project: Project, canvas: Canvas, stack_limit: int = 100) =
     var canvas = canvas
     canvas.change_id = project.next_id
     project.next_id += 1
+    if project.states.len > 0:
+        let last_index = project.states.len - 1
+        if project.current_index < last_index:
+            project.states.shrink(fromLast = last_index - project.current_index)
     project.states.addLast(canvas)
-    project.current_index = project.states.len().uint - 1
+    if project.states.len > stack_limit:
+        project.states.shrink(fromFirst = project.states.len() - stack_limit)
+    project.current_index = project.states.len() - 1
 
 func replace_current_canvas(project: Project, canvas: Canvas) =
     project.states[project.current_index] = canvas
@@ -301,26 +389,34 @@ func rebuild_layer_list(project: Project) =
             opacity: opacity_to_view(layer.opacity),
         )
 
+func get_next_viewport_id(app: App): ViewportId =
+    result = app.next_viewport_id
+    app.next_viewport_id += 1
+
+func get_next_project_id(app: App): ProjectId =
+    result = app.next_project_id
+    app.next_project_id += 1
+
 proc new_project(app: App, name: string, pixel_size: VectorI) =
     let canvas = new_blank_canvas(pixel_size)
     var project = new Project
     var viewport = new Viewport
-    var composite: CompositeData
+    var composite = new CompositeData
     composite.composite = new_tile_array[ColorPixelArray](pixel_size)
     composite.texture = create_texture()
     composite.pbo = create_pixel_buffer_object()
     resize_texture(composite, pixel_size)
     let tile_size = get_tiles_size(pixel_size)
     update_texture(composite, pixel_size, tile_size, VectorI(x:0, y:0), tile_size - VectorI(x:1, y:1))
-    viewport.id = app.next_viewport_id
-    project.id = app.next_project_id
-    app.next_viewport_id += 1
-    app.next_project_id += 1
+    viewport.id = app.get_next_viewport_id()
+    project.id = app.get_next_project_id()
+    viewport.project_id = project.id
     project.file_path = Path(name)
     project.push_canvas(canvas)
-    project.viewports[viewport.id] = viewport
+    project.viewports.incl(viewport.id)
     project.composites = project.composites.add(0.TimelinePos, composite)
     app.projects[project.id] = project
+    app.viewports[viewport.id] = viewport
     app.active_project = project
     project.rebuild_layer_list()
 
@@ -367,7 +463,8 @@ proc draw_new_canvas_dialog(app: App) =
         igInputText("File Name", app.new_canvas_dialog.name.cstring, app.new_canvas_dialog.name.len().csize_t, ImGui_InputTextFlags_None.ImGuiInputTextFlags, nil, nil)
         igInputInt("Width", cast[ptr cint](app.new_canvas_dialog.size.x.addr), 10, 100, ImGui_InputTextFlags_CharsDecimal.ImGuiInputTextFlags)
         igInputInt("Height", cast[ptr cint](app.new_canvas_dialog.size.y.addr), 10, 100, ImGui_InputTextFlags_CharsDecimal.ImGuiInputTextFlags)
-        igColorEdit4("Background", app.new_canvas_dialog.background, ImGui_ColorEditFlags_NoInputs.ImGuiColorEditFlags)
+        igColorEdit3("Background", app.new_canvas_dialog.background_color, ImGui_ColorEditFlags_NoInputs.ImGuiColorEditFlags)
+        igCheckbox("Transparent Background", app.new_canvas_dialog.background_transparent.addr)
         igBeginGroup()
         if igButton("OK", vec2(0, 0)):
             igCloseCurrentPopup()
@@ -376,30 +473,58 @@ proc draw_new_canvas_dialog(app: App) =
         if igButton("Cancel", vec2(0, 0)):
             igCloseCurrentPopup()
         igEndGroup()
-        var window = igGetCurrentWindow()
         igEndPopup()
 
-proc draw_viewport(app: App, project: Project, viewport: Viewport) =
-    if igBegin(fmt"{project.file_path}###viewport-{viewport.id}".cstring, nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
+func get_zoom_factor(level: int): float =
+    scroll_zoom_levels[clamp(level, 0, scroll_zoom_levels.len - 1)]
+
+proc draw_viewport(app: App, viewport: Viewport) =
+    let project = app.projects[viewport.project_id]
+    if igBegin(fmt"{project.file_path}###{viewport.id.int}".cstring, viewport.is_open.addr, (ImGui_WindowFlags_None).ImGuiWindowFlags):
         let
             canvas = project.get_current_canvas()
             win_center = igGetWindowPos() + igGetWindowSize() * 0.5
-            scale = 1.0
+            scale = get_zoom_factor(viewport.zoom_level)
             angle = viewport.rotation
-            offset = win_center + viewport.position
-            canvas_size = vec2(canvas.size) * scale
+            offset = igImTrunc_Vec2(win_center + viewport.position)
+            canvas_size = igImTrunc_Vec2(vec2(canvas.size) * scale)
             composite = project.composites.get(project.timeline_pos)
-        # echo fmt"{angle} {offset} {canvas_size}"
         case composite
         of Some(comp):
-            image_rotated(comp.texture, offset, canvas_size, angle)
+            let drawlist = igGetWindowDrawList()
+            # if transparent background:
+            ImDrawList_AddCallback(drawlist, checker_setup_callback, app.addr, sizeof(app.addr).csize_t)
+            draw_checker_quad(drawlist, to_ImTextureRef(app.checker_texture), offset, canvas_size, angle)
+            ImDrawList_AddCallback(drawlist, canvas_setup_callback, app.addr, sizeof(app.addr).csize_t)
+            draw_quad(drawlist, to_ImTextureRef(comp.texture), offset, canvas_size, angle)
+            ImDrawList_AddCallback(drawlist, igGetPlatformIO_Nil().DrawCallback_ResetRenderState, nil, 0)
         of None: discard
     igEnd()
 
+proc close_viewport(app: App, viewport: Viewport) =
+    var project = app.projects[viewport.project_id]
+    if project.viewports.len == 1 and not project.is_saved():
+        # show save query
+        discard
+    # else:
+    # Delete viewport
+    project.viewports.excl(viewport.id)
+    app.viewports.del(viewport.id)
+    # Switch to next viewport. Probably need to get window from imgui
+    if app.viewports.len > 0:
+        for viewport in app.viewports.values:
+            app.active_project = app.projects[viewport.project_id]
+    else:
+        app.active_project = nil
+
 proc draw_viewports(app: App) =
-    for project in app.projects.mvalues:
-        for viewport in project.viewports.mvalues:
-            app.draw_viewport(project, viewport)
+    var to_close: seq[Viewport]
+    for viewport in app.viewports.mvalues:
+        app.draw_viewport(viewport)
+        if not viewport.is_open:
+            to_close.add(viewport)
+    for viewport in to_close:
+        app.close_viewport(viewport)
 
 proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
     let canvas = project.get_current_canvas()
@@ -505,10 +630,22 @@ proc draw_menu_bar(app: App) =
 
 proc `=destroy`(app: var typeof(App()[])) =
     IGFD_Destroy(app.file_dialog)
+    glDeleteTextures(1, app.checker_texture.addr)
+    glDeleteSamplers(1, app.checker_sampler.addr)
+    glDeleteSamplers(1, app.canvas_sampler.addr)
 
 proc new_app(): App =
     result.new
     result.file_dialog = IGFD_Create()
+    result.checker_texture = create_texture()
+    set_checker_texture(result.checker_texture, 0.4, 0.6)
+    result.checker_sampler = create_checker_sampler()
+    result.canvas_sampler = create_canvas_sampler()
+    result.new_canvas_dialog.name = newString(256)
+    copy_into(result.new_canvas_dialog.name, "New Canvas")
+    result.new_canvas_dialog.size = VectorI(x:2000, y:2000)
+    result.new_canvas_dialog.background_color = [1.0, 1.0, 1.0]
+    result.new_canvas_dialog.background_transparent = false
 
 proc main(): void =
     # Initialize SDL
@@ -539,23 +676,9 @@ proc main(): void =
 
     # Init state
     var pool = new_thread_pool(2)
-
     var app = new_app()
-    app.new_canvas_dialog.name = newString(256)
-    copy_into(app.new_canvas_dialog.name, "New Canvas")
-    app.new_canvas_dialog.size = VectorI(x:2048, y:2048)
-    app.new_canvas_dialog.background = [1.0, 1.0, 1.0, 1.0]
-
-    canvas_sampler = create_sampler()
 
     app.new_project(app.new_canvas_dialog.name, app.new_canvas_dialog.size)
-
-    # var image = image_io.load[ImageRgba]("fg.png")
-    # var canvas_texture = create_texture()
-    # glBindTexture(GL_TEXTURE_2D, canvas_texture)
-    # glPixelStorei(GL_UNPACK_ROW_LENGTH, 0)
-    # glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA.GLint, image.size.x.GLsizei, image.size.y.GLsizei, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.data[0].addr)
-    # glGenerateMipmap(GL_TEXTURE_2D)
 
     while app.running:
         var e: SDL_Event
