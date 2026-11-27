@@ -50,7 +50,7 @@ type
         data*: ref seq[MaskPixelArray]
 
     GroupObj* = object
-        group_open*: bool = true
+        open*: bool = true
         last_layer*: Option[LayerId]
         first_layer*: Option[LayerId]
         # Temp buffer for compositing.
@@ -264,17 +264,17 @@ func get_referenced_mask_frames(canvas: Canvas): Set[MaskFrameId] =
         for (_, frame_id) in layer.masks.inorder:
             result = result.incl(frame_id)
 
-func clean_map[K, V](m: Map[K, V], s: Set[K]): Map[K, V] =
-    result = m
-    for key in m.keys:
-        if not s.contains(key):
-            result = result.del(key)
+func keep_keys[K, V](m: Map[K, V], keys: Set[K]): Map[K, V] =
+    for key in keys:
+        if key in m:
+            result = result.add(key, m.get(key))
 
+# TODO If this ends up being a bottleneck, replace with ref counted values.
 func cleanup_references(canvas: Canvas): Canvas =
     result = canvas
-    result.layer_lookup = clean_map(result.layer_lookup, get_referenced_layers(result, result.first_layer))
-    result.frame_lookup = clean_map(result.frame_lookup, get_referenced_frames(result))
-    result.mask_frame_lookup = clean_map(result.mask_frame_lookup, get_referenced_mask_frames(result))
+    result.layer_lookup = keep_keys(result.layer_lookup, get_referenced_layers(result, result.first_layer))
+    result.frame_lookup = keep_keys(result.frame_lookup, get_referenced_frames(result))
+    result.mask_frame_lookup = keep_keys(result.mask_frame_lookup, get_referenced_mask_frames(result))
 
 func update_parent_links*(canvas: Canvas, target_layer_id: LayerId): Canvas =
     ## Update the parent Group's links to its first and last children of the given child layer.

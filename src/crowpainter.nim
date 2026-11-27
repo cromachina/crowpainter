@@ -32,6 +32,8 @@ const scroll_zoom_levels = collect(newSeq):
         2.0 ^ (x.float / 4)
 const default_zoom_level:int = 28
 
+const font_file = staticRead("../lib/fonts/NotoSans/NotoSans.ttf")
+
 def_numerical(ViewportId, int)
 def_numerical(ProjectId, int)
 
@@ -87,7 +89,7 @@ proc `=destroy`(composite: type(CompositeData()[])) =
 
 type
     # Because the canvas state is immutable some of it has to be duplicated in the UI.
-    LayerItemData = object
+    LayerItemData = ref object
         visible: bool
         name: string
         blend_mode: BlendMode
@@ -162,8 +164,14 @@ func vec2(x, y: float): ImVec2 =
 func vec2(v: VectorI): ImVec2 =
     vec2(v.x.float, v.y.float)
 
-func vec4(x, y, z, w: float): Imvec4 =
+func vec4(x, y, z, w: float): ImVec4 =
     ImVec4(x:x, y:y, z:z, w:w)
+
+proc to_color(vec: ImVec4): ImU32 =
+    igColorConvertFloat4ToU32(vec)
+
+proc to_color(r, g, b, a: float): ImU32 =
+    igColorConvertFloat4ToU32(vec4(r, g, b, a))
 
 func `+`(a, b: ImVec2): ImVec2 =
     vec2(a.x + b.x, a.y + b.y)
@@ -173,6 +181,21 @@ func `*`(a: ImVec2, b: float): ImVec2 =
 
 func `*`(a: ImVec2, b: ImVec2): ImVec2 =
     vec2(a.x * b.x, a.y * b.y)
+
+proc add_hsv(color: ImVec4, h, s, v: cfloat): ImVec4 =
+    var hsv: ImVec4
+    igColorConvertRGBtoHSV(color.x, color.y, color.z, hsv.x.addr, hsv.y.addr, hsv.z.addr)
+    hsv.x = (hsv.x + h) mod 1.0
+    hsv.y = clamp(hsv.y + s, 0.cfloat .. 1.cfloat)
+    hsv.z = clamp(hsv.z + v, 0.cfloat .. 1.cfloat)
+    igColorConvertHSVtoRGB(hsv.x, hsv.y, hsv.z, result.x.addr, result.y.addr, result.z.addr)
+    result.w = color.w
+
+proc add_rgb(color: ImVec4, r, g, b: cfloat): ImVec4 =
+    result.x = clamp(color.x + r, 0.cfloat .. 1.cfloat)
+    result.y = clamp(color.y + g, 0.cfloat .. 1.cfloat)
+    result.z = clamp(color.z + b, 0.cfloat .. 1.cfloat)
+    result.w = color.w
 
 const IM_COL32_WHITE = 0xffffffff.ImU32
 
@@ -380,6 +403,10 @@ func replace_current_canvas(project: Project, canvas: Canvas) =
 
 func rebuild_layer_list(project: Project) =
     project.layer_list.layers.clear()
+    # project.layer_list.selection.with(
+    #     UserData = project.addr,
+    #     AdapterIndexToStorageId =
+    # )
     let canvas = project.get_current_canvas()
     for layer in canvas.layer_lookup.values:
         project.layer_list.layers[layer.id] = LayerItemData(
@@ -527,41 +554,86 @@ proc draw_viewports(app: App) =
         app.close_viewport(viewport)
 
 proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
-    let canvas = project.get_current_canvas()
-    let layer = canvas.get(layer_id)
+    var canvas = project.get_current_canvas()
+    var layer = canvas.get(layer_id)
     var layer_widget = project.layer_list.layers[layer_id]
     let id = layer.id.int
-    var flags = ImGui_TreeNodeFlags_AllowOverlap or
-        ImGui_TreeNodeFlags_Framed or
-        ImGui_TreeNodeFlags_DefaultOpen or
-        ImGui_TreeNodeFlags_SpanAvailWidth or
-        ImGui_TreeNodeFlags_OpenOnArrow
-    if not is_group(layer):
-        flags = flags or ImGui_TreeNodeFlags_Leaf
-    igPushStyleVar_Vec2(ImGui_StyleVar_FramePadding.ImguiStyleVar, vec2(0, 20))
     let node_id = fmt"###layer-node-{id}".cstring
-    let opened = igTreeNodeEx_Str(node_id, flags.ImGuiTreeNodeFlags)
-    igPopStyleVar(1)
-    if igIsItemHovered(ImGui_HoveredFlags_None.ImguiHoveredFlags) and igIsMouseDoubleClicked_Nil(ImGui_MouseButton_Left.ImguiMouseButton):
-        debugEcho &"double clicked {layer.name}"
-    igSameLine(0, 0)
+    let button_flags = ImGui_ButtonFlags_PressedOnClick
+    let indent = 20.0
+    let style = igGetStyle()
+    let rounding = style[].FrameRounding
+    let border_size = style[].FrameBorderSize
+    let spacing = style[].ItemInnerSpacing
+    var start = igGetCursorScreenPos()
+    var height = 50.0
+
+    igSetNextItemAllowOverlap()
+    igInvisibleButton(node_id, vec2(-1, height), button_flags.ImGuiButtonFlags)
+    igSetCursorScreenPos(start)
+    var factor = 0.0
+    if layer_id in canvas.multi_selected_layers:
+        factor += 0.4
+    if igIsItemHovered(ImGui_HoveredFlags_None.ImguiHoveredFlags):
+        factor += 0.25
+        if igIsMouseDoubleClicked_Nil(ImGui_MouseButton_Left.ImGuiMouseButton):
+            debugEcho &"double clicked {layer.name}"
+            # TODO do rename layer here
+        elif igIsMouseClicked_Bool(ImGui_MouseButton_Left.ImGuiMouseButton, false):
+            canvas.selected_layer = some(layer_id)
+            canvas.multi_selected_layers = parazoa.toSet([layer_id])
+            project.replace_current_canvas(canvas)
+        if igIsMouseDown_Nil(ImGui_MouseButton_Left.ImGuiMouseButton):
+            factor += 0.25
+    let drawlist = igGetWindowDrawList()
+    let rect_min = igGetItemRectMin()
+    let rect_max = igGetItemRectMax()
+    drawlist.ImDrawList_PushClipRect(rect_min, rect_max, true)
+    var color = igImLerp_Vec4(igGetStyleColorVec4(ImGui_Col_FrameBg.ImGuiCol)[], igGetStyleColorVec4(ImGui_Col_FrameBgHovered.ImGuiCol)[], factor)
+    if layer.is_group():
+        color = add_hsv(color, 0, -0.2, -0.2)
+    drawlist.ImDrawList_AddRectFilled(rect_min, rect_max, to_color(color), rounding, ImDrawFlags_None.ImDrawFlags)
+    if layer.is_group():
+        let border_color = igGetStyleColorVec4(ImGui_Col_Border.ImGuiCol)[]
+        drawlist.ImDrawList_AddRect(rect_min, rect_max, to_color(border_color), rounding, border_size, ImDrawFlags_None.ImDrawFlags)
+
     if igCheckbox(fmt"###layer-visible-{id}".cstring, layer_widget.visible.addr):
-        discard
-    igSameLine(0, 10)
-    igBeginGroup()
-    igSetCursorPosY(igGetCursorPosY() - 18)
-    igText(layer_widget.name.cstring)
-    igText(get_blend_mode_name(layer_widget.blend_mode).cstring)
-    igText(fmt"{layer_widget.opacity.int}%%".cstring)
-    igEndGroup()
+        layer.visible = layer_widget.visible
+        canvas.update(layer)
+        project.replace_current_canvas(canvas)
+    igSameLine(0, spacing.x)
+
     case layer
     of Group(group):
-        if opened:
+        let arrow_dir = if group.open: ImGui_Dir_Down else: ImGuiDir_Right
+        if igArrowButton(fmt"###group-open-{id}".cstring, arrow_dir.ImGuiDir):
+            group.open = not group.open
+            canvas.update(layer)
+            project.replace_current_canvas(canvas)
+    else:
+        igDummy(vec2(20, -1))
+    igSameLine(0, spacing.x)
+
+    igBeginGroup()
+    igPushStyleVar_Y(ImGui_StyleVar_ItemSpacing.ImGuiStyleVar, 0.0)
+    igText(layer_widget.name.cstring)
+    let font_size = igGetFontSize() * 0.75
+    igPushFont(nil, font_size)
+    igText(get_blend_mode_name(layer_widget.blend_mode).cstring)
+    igText(fmt"{layer_widget.opacity.int}%%".cstring)
+    igPopFont()
+    igPopStyleVar(1)
+    igEndGroup()
+    drawlist.ImDrawList_PopClipRect()
+
+    case layer
+    of Group(group):
+        if group.open:
+            igIndent(indent)
             for layer in reverse_group_layers_iter(canvas, group):
                 draw_layer_item(app, project, layer.id)
+            igUnIndent(indent)
     else: discard
-    if opened:
-        igTreePop()
 
 proc draw_layers_list(app: App) =
     if igBegin("Layers", nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
@@ -669,6 +741,12 @@ proc main(): void =
     let io = igGetIO_ContextPtr(ctx)
     io.ConfigFlags = io.ConfigFlags or ImGui_ConfigFlags_DockingEnable.ImGuiConfigFlags
     io.ConfigWindowsMoveFromTitleBarOnly = true
+    var font_cfg = ImFontConfig_ImFontConfig()
+    defer: ImFontConfig_destroy(font_cfg)
+    font_cfg[].FontDataOwnedByAtlas = false
+    var data_temp = font_file
+    let font = io.Fonts.ImFontAtlas_AddFontFromMemoryTTF(data_temp[0].addr, font_file.len().cint, 18, font_cfg, nil)
+    data_temp = ""
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context)
     defer: ImGui_ImplSdl3_Shutdown()
     ImGui_ImplOpenGL3_Init("#version 430 core")
@@ -679,6 +757,17 @@ proc main(): void =
     var app = new_app()
 
     app.new_project(app.new_canvas_dialog.name, app.new_canvas_dialog.size)
+    var style = igGetStyle()
+    style[].FrameRounding = 4
+    style[].WindowRounding = 4
+
+    # TESTING
+    app.add_new_layer()
+    app.add_new_layer()
+    app.add_new_layer()
+    app.add_new_group()
+    app.add_new_layer()
+    app.add_new_layer()
 
     while app.running:
         var e: SDL_Event
@@ -714,9 +803,13 @@ proc main(): void =
         app.draw_open_dialog()
         app.draw_save_dialog()
 
+        # let style = igGetStyle()
+        # igShowStyleEditor(style)
+
         igRender()
         glViewport(0, 0, io.DisplaySize.x.GLsizei, io.DisplaySize.y.GLsizei)
-        glClearColor(0.1, 0.1, 0.1, 1.0)
+        let bg_color = style[].Colors[ImGui_Col_WindowBg.int]
+        glClearColor(bg_color.x, bg_color.y, bg_color.z, 1.0)
         glClear(GL_COLOR_BUFFER_BIT)
         ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData())
         SDL_GL_SwapWindow(window)
