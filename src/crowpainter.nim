@@ -665,7 +665,7 @@ proc draw_menu_bar(app: App) =
                     ImGui_FileDialogFlags_ShowDevicesButton or
                     ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).ImGuiFileDialogFlags
                 IGFD_OpenDialog(app.file_dialog,
-                    "open_dialog",
+                    "open-dialog",
                     "Open",
                     open_filters,
                     config)
@@ -684,7 +684,7 @@ proc draw_menu_bar(app: App) =
                     ImGui_FileDialogFlags_ShowDevicesButton or
                     ImGui_FileDialogFlags_CaseInsensitiveExtentionFiltering).ImGuiFileDialogFlags
                 IGFD_OpenDialog(app.file_dialog,
-                    "save_dialog",
+                    "save-dialog",
                     "Save",
                     save_filters,
                     config)
