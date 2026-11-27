@@ -18,6 +18,7 @@ import std/typedthreads
 import std/tables
 import std/deques
 import std/sets
+import std/with
 
 import blendfuncs
 import canvas
@@ -764,8 +765,17 @@ proc main(): void =
 
     app.new_project(app.new_canvas_dialog.name, app.new_canvas_dialog.size)
     var style = igGetStyle()
-    style[].FrameRounding = 4
-    style[].WindowRounding = 4
+    with style[]:
+        WindowPadding = vec2(3, 3)
+        FramePadding = vec2(3, 3)
+        ItemSpacing = vec2(6, 3)
+        ItemInnerSpacing = vec2(4, 4)
+        WindowRounding = 4
+        ChildRounding = 4
+        FrameRounding = 4
+        PopupRounding = 4
+        GrabRounding = 4
+        MenuItemRounding = 4
 
     # TESTING
     app.add_new_layer()
