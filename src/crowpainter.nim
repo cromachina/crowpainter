@@ -99,6 +99,7 @@ type
         move_lock: bool
         all_lock: bool
         clipping: bool
+        item_rect_max: ImVec2
 
     LayerListData = object
         layers = newTable[LayerId, LayerItemData]()
@@ -403,10 +404,6 @@ func replace_current_canvas(project: Project, canvas: Canvas) =
 
 func rebuild_layer_list(project: Project) =
     project.layer_list.layers.clear()
-    # project.layer_list.selection.with(
-    #     UserData = project.addr,
-    #     AdapterIndexToStorageId =
-    # )
     let canvas = project.get_current_canvas()
     for layer in canvas.layer_lookup.values:
         project.layer_list.layers[layer.id] = LayerItemData(
@@ -558,7 +555,6 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
     var layer = canvas.get(layer_id)
     var layer_widget = project.layer_list.layers[layer_id]
     let id = layer.id.int
-    let node_id = fmt"###layer-node-{id}".cstring
     let button_flags = ImGui_ButtonFlags_PressedOnClick
     let indent = 20.0
     let style = igGetStyle()
@@ -566,37 +562,11 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
     let border_size = style[].FrameBorderSize
     let spacing = style[].ItemInnerSpacing
     var start = igGetCursorScreenPos()
-    var height = 50.0
-
-    igSetNextItemAllowOverlap()
-    igInvisibleButton(node_id, vec2(-1, height), button_flags.ImGuiButtonFlags)
-    igSetCursorScreenPos(start)
-    var factor = 0.0
-    if layer_id in canvas.multi_selected_layers:
-        factor += 0.4
-    if igIsItemHovered(ImGui_HoveredFlags_None.ImguiHoveredFlags):
-        factor += 0.25
-        if igIsMouseDoubleClicked_Nil(ImGui_MouseButton_Left.ImGuiMouseButton):
-            debugEcho &"double clicked {layer.name}"
-            # TODO do rename layer here
-        elif igIsMouseClicked_Bool(ImGui_MouseButton_Left.ImGuiMouseButton, false):
-            canvas.selected_layer = some(layer_id)
-            canvas.multi_selected_layers = parazoa.toSet([layer_id])
-            project.replace_current_canvas(canvas)
-        if igIsMouseDown_Nil(ImGui_MouseButton_Left.ImGuiMouseButton):
-            factor += 0.25
     let drawlist = igGetWindowDrawList()
-    let rect_min = igGetItemRectMin()
-    let rect_max = igGetItemRectMax()
-    drawlist.ImDrawList_PushClipRect(rect_min, rect_max, true)
-    var color = igImLerp_Vec4(igGetStyleColorVec4(ImGui_Col_FrameBg.ImGuiCol)[], igGetStyleColorVec4(ImGui_Col_FrameBgHovered.ImGuiCol)[], factor)
-    if layer.is_group():
-        color = add_hsv(color, 0, -0.2, -0.2)
-    drawlist.ImDrawList_AddRectFilled(rect_min, rect_max, to_color(color), rounding, ImDrawFlags_None.ImDrawFlags)
-    if layer.is_group():
-        let border_color = igGetStyleColorVec4(ImGui_Col_Border.ImGuiCol)[]
-        drawlist.ImDrawList_AddRect(rect_min, rect_max, to_color(border_color), rounding, border_size, ImDrawFlags_None.ImDrawFlags)
+    drawlist.ImDrawList_ChannelsSplit(2)
+    drawlist.ImDrawList_ChannelsSetCurrent(1)
 
+    drawlist.ImDrawList_PushClipRect(start, layer_widget.item_rect_max, true)
     if igCheckbox(fmt"###layer-visible-{id}".cstring, layer_widget.visible.addr):
         layer.visible = layer_widget.visible
         canvas.update(layer)
@@ -616,15 +586,51 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
 
     igBeginGroup()
     igPushStyleVar_Y(ImGui_StyleVar_ItemSpacing.ImGuiStyleVar, 0.0)
-    igText(layer_widget.name.cstring)
+    igText(layer.name.cstring)
     let font_size = igGetFontSize() * 0.75
     igPushFont(nil, font_size)
-    igText(get_blend_mode_name(layer_widget.blend_mode).cstring)
-    igText(fmt"{layer_widget.opacity.int}%%".cstring)
+    igText(get_blend_mode_name(layer.blend_mode).cstring)
+    igText(fmt"{opacity_to_view(layer.opacity).int}%%".cstring)
     igPopFont()
     igPopStyleVar(1)
     igEndGroup()
     drawlist.ImDrawList_PopClipRect()
+
+    drawlist.ImDrawList_ChannelsSetCurrent(0)
+    let cur_end = igGetCursorScreenPos()
+    var height = cur_end.y - start.y
+
+    igSetCursorScreenPos(start)
+    igSetNextItemAllowOverlap()
+    igInvisibleButton(fmt"###layer-node-{id}".cstring, vec2(-1, height), button_flags.ImGuiButtonFlags)
+    var factor = 0.0
+    if layer_id in canvas.multi_selected_layers:
+        factor += 0.4
+    if igIsItemHovered(ImGui_HoveredFlags_None.ImguiHoveredFlags):
+        factor += 0.25
+        if igIsMouseDoubleClicked_Nil(ImGui_MouseButton_Left.ImGuiMouseButton):
+            debugEcho &"double clicked {layer.name}"
+            # TODO do rename layer here
+        elif igIsMouseClicked_Bool(ImGui_MouseButton_Left.ImGuiMouseButton, false):
+            canvas.selected_layer = some(layer_id)
+            canvas.multi_selected_layers = parazoa.toSet([layer_id])
+            project.replace_current_canvas(canvas)
+        if igIsMouseDown_Nil(ImGui_MouseButton_Left.ImGuiMouseButton):
+            factor += 0.25
+    let rect_min = igGetItemRectMin()
+    let rect_max = igGetItemRectMax()
+    var color = igImLerp_Vec4(igGetStyleColorVec4(ImGui_Col_FrameBg.ImGuiCol)[], igGetStyleColorVec4(ImGui_Col_FrameBgActive.ImGuiCol)[], factor)
+    if layer.is_group():
+        color = add_hsv(color, 0, -0.2, -0.2)
+    drawlist.ImDrawList_AddRectFilled(rect_min, rect_max, to_color(color), rounding, ImDrawFlags_None.ImDrawFlags)
+    if layer.is_group():
+        let border_color = igGetStyleColorVec4(ImGui_Col_Border.ImGuiCol)[]
+        drawlist.ImDrawList_AddRect(rect_min, rect_max, to_color(border_color), rounding, border_size, ImDrawFlags_None.ImDrawFlags)
+
+    drawlist.ImDrawList_ChannelsMerge()
+
+    # Hacky 1 frame delay size recomputation stuff.
+    layer_widget.item_rect_max = rect_max
 
     case layer
     of Group(group):
