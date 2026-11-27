@@ -93,7 +93,6 @@ type
     LayerItemData = ref object
         visible: bool
         name: string
-        blend_mode: BlendMode
         opacity: float
         alpha_lock: bool
         draw_lock: bool
@@ -156,6 +155,8 @@ type
         checker_texture: GLuint
         checker_sampler: GLuint
         canvas_sampler: GLuint
+        theme: cint
+        show_layers = true
 
 func `$`(v: ImVec2): string =
     &"{{{v.x}, {v.y}}}"
@@ -410,7 +411,6 @@ func rebuild_layer_list(project: Project) =
         project.layer_list.layers[layer.id] = LayerItemData(
             name: layer.name,
             visible: layer.visible,
-            blend_mode: layer.blend_mode,
             opacity: opacity_to_view(layer.opacity),
         )
 
@@ -606,9 +606,9 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
     igInvisibleButton(fmt"###layer-node-{id}".cstring, vec2(-1, height), button_flags.ImGuiButtonFlags)
     var factor = 0.0
     if layer_id in canvas.multi_selected_layers:
-        factor += 0.4
+        factor += 0.6
     if igIsItemHovered(ImGui_HoveredFlags_None.ImguiHoveredFlags):
-        factor += 0.25
+        factor += 0.2
         if igIsMouseDoubleClicked_Nil(ImGui_MouseButton_Left.ImGuiMouseButton):
             debugEcho &"double clicked {layer.name}"
             # TODO do rename layer here
@@ -617,7 +617,7 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
             canvas.multi_selected_layers = parazoa.toSet([layer_id])
             project.replace_current_canvas(canvas)
         if igIsMouseDown_Nil(ImGui_MouseButton_Left.ImGuiMouseButton):
-            factor += 0.25
+            factor += 0.2
     let rect_min = igGetItemRectMin()
     let rect_max = igGetItemRectMax()
     var color = igImLerp_Vec4(igGetStyleColorVec4(ImGui_Col_FrameBg.ImGuiCol)[], igGetStyleColorVec4(ImGui_Col_FrameBgActive.ImGuiCol)[], factor)
@@ -642,14 +642,64 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
             igUnIndent(indent)
     else: discard
 
+func get_current_layer(project: Project): tuple[layer: Layer, valid: bool] =
+    if project == nil:
+        return (Layer(), false)
+    var canvas = project.get_current_canvas()
+    case canvas.selected_layer
+    of Some(layer_id):
+        return (canvas.get(layer_id), true)
+    of None:
+        return (Layer(), false)
+
+func push_layer_update(project: Project, layer: Layer) =
+    var canvas = project.get_current_canvas()
+    canvas.update(layer)
+    project.push_canvas(canvas)
+
+proc draw_layer_edit_panel(app: App) =
+    let project = app.active_project
+    var res = get_current_layer(project)
+    var layer = res.layer
+    var disabled = project == nil or not res.valid
+
+    igBeginDisabled(disabled)
+
+    let combo_flags = ImGui_ComboFlags_HeightLargest
+    if igBeginCombo("Mode", get_blend_mode_name(layer.blend_mode), combo_flags.ImGuiComboFlags):
+        for mode in BlendMode.items:
+            if mode == BlendMode.PASS and not layer.is_group():
+                continue
+            let selected = mode == layer.blend_mode
+            if igSelectable_Bool(get_blend_mode_name(mode), selected, ImGui_SelectableFlags_None.ImGuiSelectableFlags, vec2(0, 0)):
+                layer.blend_mode = mode
+                project.push_layer_update(layer)
+            if selected:
+                igSetItemDefaultFocus()
+        igEndCombo()
+
+    igEndDisabled()
+
+    igSeparator()
+
 proc draw_layers_list(app: App) =
-    if igBegin("Layers", nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
-        let project = app.active_project
-        if not project.isNil:
-            let canvas = project.get_current_canvas()
-            for layer in reverse_group_layers_iter(canvas):
-                draw_layer_item(app, project, layer.id)
-    igEnd()
+    if app.show_layers:
+        if igBegin("Layers###layers-list", nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
+            app.draw_layer_edit_panel()
+            let project = app.active_project
+            if not project.isNil:
+                let canvas = project.get_current_canvas()
+                for layer in reverse_group_layers_iter(canvas):
+                    draw_layer_item(app, project, layer.id)
+        igEnd()
+
+proc set_theme(app: App) =
+    var style = igGetStyle()
+    case app.theme
+    of 0: igStyleColorsDark(style)
+    of 1: igStyleColorsLight(style)
+    of 2: igStyleColorsClassic(style)
+    else: discard
 
 proc draw_menu_bar(app: App) =
     if igBeginMainMenuBar():
@@ -704,6 +754,13 @@ proc draw_menu_bar(app: App) =
         if igBeginMenu("View", true):
             igEndMenu()
         if igBeginMenu("Window", true):
+            if igRadioButton_IntPtr("Dark Theme", app.theme.addr, 0):
+                app.set_theme()
+            if igRadioButton_IntPtr("Light Theme", app.theme.addr, 1):
+                app.set_theme()
+            if igRadioButton_IntPtr("Classic Theme", app.theme.addr, 2):
+                app.set_theme()
+            igCheckBox("Show Layers", app.show_layers.addr)
             igEndMenu()
         igEndMainMenuBar()
 
