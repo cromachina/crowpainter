@@ -97,12 +97,10 @@ type
         visible: bool
         name: string
         opacity: cfloat
-        item_rect_max: ImVec2
         ephemeral_edit: bool
 
     LayerListData = object
         layers = newTable[LayerId, LayerItemData]()
-        selection: ImGuiSelectionBasicStorage
 
     ## Maintains the canvas states and UI views.
     Project = ref object
@@ -156,6 +154,12 @@ type
         canvas_sampler: GLuint
         theme: cint
         show_layers = true
+
+proc `=destroy`(app: var type(App()[])) =
+    IGFD_Destroy(app.file_dialog)
+    glDeleteTextures(1, app.checker_texture.addr)
+    glDeleteSamplers(1, app.checker_sampler.addr)
+    glDeleteSamplers(1, app.canvas_sampler.addr)
 
 func `$`(v: ImVec2): string =
     &"{{{v.x}, {v.y}}}"
@@ -603,7 +607,6 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
     drawlist.ImDrawList_ChannelsSplit(2)
     drawlist.ImDrawList_ChannelsSetCurrent(1)
 
-    drawlist.ImDrawList_PushClipRect(start, layer_widget.item_rect_max, true)
     if igCheckbox(fmt"###layer-visible-{id}".cstring, layer_widget.visible.addr):
         layer.visible = layer_widget.visible
         canvas.update(layer)
@@ -631,7 +634,6 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
     igPopFont()
     igPopStyleVar(1)
     igEndGroup()
-    drawlist.ImDrawList_PopClipRect()
 
     drawlist.ImDrawList_ChannelsSetCurrent(0)
     let cur_end = igGetCursorScreenPos()
@@ -663,11 +665,7 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
     if layer.is_group():
         let border_color = igGetStyleColorVec4(ImGui_Col_Border.ImGuiCol)[]
         drawlist.ImDrawList_AddRect(rect_min, rect_max, to_color(border_color), rounding, border_size, ImDrawFlags_None.ImDrawFlags)
-
     drawlist.ImDrawList_ChannelsMerge()
-
-    # Hacky 1 frame delay size recomputation stuff.
-    layer_widget.item_rect_max = rect_max
 
     case layer
     of Group(group):
@@ -873,12 +871,6 @@ proc draw_menu_bar(app: App) =
             igCheckBox("Show Layers", app.show_layers.addr)
             igEndMenu()
         igEndMainMenuBar()
-
-proc `=destroy`(app: var typeof(App()[])) =
-    IGFD_Destroy(app.file_dialog)
-    glDeleteTextures(1, app.checker_texture.addr)
-    glDeleteSamplers(1, app.checker_sampler.addr)
-    glDeleteSamplers(1, app.canvas_sampler.addr)
 
 proc new_app(): App =
     result.new
