@@ -485,18 +485,25 @@ proc new_project(app: App, name: string, pixel_size: VectorI) =
     app.active_project = project
     project.rebuild_layer_list()
 
-func add_new_layer(app: App) =
+func new_layer(app: App) =
     var project = app.active_project
     if project.isNil:
         return
     project.push_canvas(new_layer(project.get_current_canvas()))
     project.rebuild_layer_list()
 
-func add_new_group(app: App) =
+func new_group(app: App) =
     var project = app.active_project
     if project.isNil:
         return
     project.push_canvas(new_group(project.get_current_canvas()))
+    project.rebuild_layer_list()
+
+func delete_layers(app: App) =
+    var project = app.active_project
+    if project.isNil:
+        return
+    project.push_canvas(delete_layers(project.get_current_canvas()))
     project.rebuild_layer_list()
 
 proc draw_open_dialog(app: App) =
@@ -691,7 +698,7 @@ var dummy_layer_widget = LayerItemData()
 proc get_current_layer_item_data(project: Project, layer_id: LayerId): LayerItemData =
     if project == nil:
         return dummy_layer_widget
-    return project.layer_list.layers[layer_id]
+    return project.layer_list.layers.getOrDefault(layer_id, dummy_layer_widget)
 
 func push_layer_update(project: Project, layer: Layer) =
     var canvas = project.get_current_canvas()
@@ -707,9 +714,11 @@ proc draw_layer_edit_panel(app: App) =
     let project = app.active_project
     var res = get_current_layer(project)
     var layer = res.layer
-    var disabled = project == nil or not res.valid
+    var no_project_disabled = project == nil
+    var layer_edit_disabled = project == nil or not res.valid
 
-    igBeginDisabled(disabled)
+    igBeginDisabled(no_project_disabled)
+    igBeginDisabled(layer_edit_disabled)
 
     let combo_flags = ImGui_ComboFlags_HeightLargest
     if igBeginCombo("Mode", get_blend_mode_name(layer.blend_mode).cstring, combo_flags.ImGuiComboFlags):
@@ -725,8 +734,7 @@ proc draw_layer_edit_panel(app: App) =
         igEndCombo()
 
     var layer_widget = project.get_current_layer_item_data(layer.id)
-    var opacity_ptr = if layer_widget != nil: layer_widget.opacity.addr else: nil
-    if igSliderFloat("Opacity", opacity_ptr, 0, 100, "%.0f", ImGui_SliderFlags_AlwaysClamp.ImGuiSliderFlags):
+    if igSliderFloat("Opacity", layer_widget.opacity.addr, 0, 100, "%.0f", ImGui_SliderFlags_AlwaysClamp.ImGuiSliderFlags):
         layer.opacity = view_to_opacity(layer_widget.opacity.float)
         if layer_widget.ephemeral_edit:
             project.push_layer_update(layer)
@@ -758,13 +766,15 @@ proc draw_layer_edit_panel(app: App) =
         layer.lock_all = not layer.lock_all
         project.push_layer_update(layer)
 
+    igEndDisabled()
+
     igSeparator()
 
     if simple_button(ICON_LAYER, "New layer"):
-        app.add_new_layer()
+        app.new_layer()
     same_line()
     if simple_button(ICON_GROUP, "New group"):
-        app.add_new_group()
+        app.new_group()
     same_line()
     if simple_button(ICON_MASK, "Add mask"):
         discard
@@ -782,7 +792,7 @@ proc draw_layer_edit_panel(app: App) =
         discard
     same_line()
     if simple_button(ICON_DELETE, "Delete selected layers"):
-        discard
+        app.delete_layers()
 
     igEndDisabled()
 
@@ -952,12 +962,12 @@ proc main(): void =
         MenuItemRounding = 4
 
     # TESTING
-    app.add_new_layer()
-    app.add_new_layer()
-    app.add_new_layer()
-    app.add_new_group()
-    app.add_new_layer()
-    app.add_new_layer()
+    app.new_layer()
+    app.new_layer()
+    app.new_layer()
+    app.new_group()
+    app.new_layer()
+    app.new_layer()
 
     while app.running:
         var e: SDL_Event

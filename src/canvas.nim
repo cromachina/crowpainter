@@ -423,14 +423,16 @@ func unlink_layer*(canvas: Canvas, target_layer_id: LayerId): Canvas =
             result.first_layer = layer.next_layer
 
 func find_selected_ancenstor*(canvas: Canvas, target_layer_id: LayerId): LayerId =
+    var current = target_layer_id
     result = target_layer_id
     while true:
-        var layer = canvas.get(result)
+        var layer = canvas.get(current)
         var maybe_parent = canvas.get(layer.parent_layer)
         case maybe_parent
         of Some(parent):
             if parent.id in canvas.multi_selected_layers:
                 result = parent.id
+            current = parent.id
         of None:
             break
 
@@ -479,7 +481,8 @@ func delete_layers*(canvas: Canvas): Canvas =
     case next_selection
     of Some(next_selection):
         result.multi_selected_layers = parazoa.toSet([next_selection])
-    of None: discard
+    of None:
+        result.multi_selected_layers = parazoa.toSet[LayerId]([])
     return cleanup_references(result)
 
 func move_layers*(canvas: Canvas, target_layer_id: LayerId, insert_op: ((Canvas, LayerId, Layer) {.noSideEffect.} -> Canvas)): Canvas =
