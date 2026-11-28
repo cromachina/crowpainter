@@ -65,8 +65,8 @@ const sqrt_lut = make_sqrt_lut()
 func opacity_to_view*(opacity: int16): float =
     opacity.float / range_max.float * 100
 
-func view_to_opacity*(view: int): float =
-    (view.float / 100) * range_max.float
+func view_to_opacity*(view: float): int16 =
+    ((view.float / 100) * range_max.float).int16
 
 func get_linear_index*(row_size: int, tile_index: VectorI): int =
     tile_index.y * row_size + tile_index.x

@@ -19,6 +19,7 @@ import std/tables
 import std/deques
 import std/sets
 import std/with
+import std/unicode
 
 import blendfuncs
 import canvas
@@ -27,6 +28,7 @@ import image_io
 import threadpool
 import util
 import option
+import icons
 
 const scroll_zoom_levels = collect(newSeq):
     for x in countup(-28, 20):
@@ -34,6 +36,7 @@ const scroll_zoom_levels = collect(newSeq):
 const default_zoom_level:int = 28
 
 const font_file = staticRead("../lib/fonts/NotoSans/NotoSans.ttf")
+const icon_file = staticRead("../lib/icons/icons.ttf")
 
 def_numerical(ViewportId, int)
 def_numerical(ProjectId, int)
@@ -93,13 +96,9 @@ type
     LayerItemData = ref object
         visible: bool
         name: string
-        opacity: float
-        alpha_lock: bool
-        draw_lock: bool
-        move_lock: bool
-        all_lock: bool
-        clipping: bool
+        opacity: cfloat
         item_rect_max: ImVec2
+        ephemeral_edit: bool
 
     LayerListData = object
         layers = newTable[LayerId, LayerItemData]()
@@ -188,16 +187,31 @@ func `*`(a: ImVec2, b: ImVec2): ImVec2 =
 proc add_hsv(color: ImVec4, h, s, v: cfloat): ImVec4 =
     var hsv: ImVec4
     igColorConvertRGBtoHSV(color.x, color.y, color.z, hsv.x.addr, hsv.y.addr, hsv.z.addr)
-    hsv.x = (hsv.x + h) mod 1.0
+    hsv.x = floorMod(hsv.x + h, 1.0)
     hsv.y = clamp(hsv.y + s, 0.cfloat .. 1.cfloat)
     hsv.z = clamp(hsv.z + v, 0.cfloat .. 1.cfloat)
     igColorConvertHSVtoRGB(hsv.x, hsv.y, hsv.z, result.x.addr, result.y.addr, result.z.addr)
     result.w = color.w
 
-proc add_rgb(color: ImVec4, r, g, b: cfloat): ImVec4 =
+proc add_hsv_wrap(color: ImVec4, h, s, v: cfloat): ImVec4 =
+    var hsv: ImVec4
+    igColorConvertRGBtoHSV(color.x, color.y, color.z, hsv.x.addr, hsv.y.addr, hsv.z.addr)
+    hsv.x = floorMod(hsv.x + h, 1.0)
+    hsv.y = floorMod(hsv.y + s, 1.0)
+    hsv.z = floorMod(hsv.z + v, 1.0)
+    igColorConvertHSVtoRGB(hsv.x, hsv.y, hsv.z, result.x.addr, result.y.addr, result.z.addr)
+    result.w = color.w
+
+func add_rgb(color: ImVec4, r, g, b: cfloat): ImVec4 =
     result.x = clamp(color.x + r, 0.cfloat .. 1.cfloat)
     result.y = clamp(color.y + g, 0.cfloat .. 1.cfloat)
     result.z = clamp(color.z + b, 0.cfloat .. 1.cfloat)
+    result.w = color.w
+
+func add_rgb_wrap(color: ImVec4, r, g, b: cfloat): ImVec4 =
+    result.x = floorMod(color.x + r, 1.0)
+    result.y = floorMod(color.y + g, 1.0)
+    result.z = floorMod(color.z + b, 1.0)
     result.w = color.w
 
 const IM_COL32_WHITE = 0xffffffff.ImU32
@@ -345,6 +359,28 @@ proc draw_quad(drawlist: ptr ImDrawList, texture: ImTextureRef, center, size: Im
         uv2 = vec2(1, 1)
         uv3 = vec2(0, 1)
     ImDrawList_AddImageQuad(drawlist, texture, p0, p1, p2, p3, uv0, uv1, uv2, uv3, IM_COL32_WHITE)
+
+proc same_line(start_x: cfloat = 0, spacing:cfloat = -1) =
+    igSameLine(start_x, spacing)
+
+func glyph(rune: Rune): cstring =
+    ($rune).cstring
+
+proc toggle_button(icon: Rune, tooltip: string, active: bool): bool =
+    let style = igGetStyle()
+    if not active:
+        igPushStyleColor_Vec4(ImGui_Col_Text.ImGuiCol, add_hsv_wrap(style[].Colors[ImGui_Col_Text.int], 0, 0, -0.5))
+        igPushStyleColor_Vec4(ImGui_Col_Button.ImGuiCol, add_hsv(style[].Colors[ImGui_Col_Button.int], 0, -1, -0.5))
+        igPushStyleColor_Vec4(ImGui_Col_ButtonActive.ImGuiCol, add_hsv(style[].Colors[ImGui_Col_ButtonActive.int], 0, -1, -0.5))
+        igPushStyleColor_Vec4(ImGui_Col_ButtonHovered.ImGuiCol, add_hsv(style[].Colors[ImGui_Col_ButtonHovered.int], 0, -1, -0.5))
+    result = igButtonEx(icon.glyph, vec2(0, 0), ImGui_ButtonFlags_PressedOnClick.ImGuiButtonFlags)
+    if not active:
+        igPopStyleColor(4)
+    igSetItemTooltip(tooltip.cstring)
+
+proc simple_button(icon: Rune, tooltip: string): bool =
+    result = igButtonEx(icon.glyph, vec2(0, 0), ImGui_ButtonFlags_None.ImGuiButtonFlags)
+    igSetItemTooltip(tooltip.cstring)
 
 proc update_texture(composite_data: CompositeData, pixel_size, composite_tile_size, tile_offset, offset_size: VectorI) =
     glBindTexture(GL_TEXTURE_2D, composite_data.texture)
@@ -494,7 +530,7 @@ proc draw_new_canvas_dialog(app: App) =
         if igButton("OK", vec2(0, 0)):
             igCloseCurrentPopup()
             app.new_project(app.new_canvas_dialog.name, app.new_canvas_dialog.size)
-        igSameLine(0, 10)
+        same_line()
         if igButton("Cancel", vec2(0, 0)):
             igCloseCurrentPopup()
         igEndGroup()
@@ -572,7 +608,7 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
         layer.visible = layer_widget.visible
         canvas.update(layer)
         project.replace_current_canvas(canvas)
-    igSameLine(0, spacing.x)
+    same_line()
 
     case layer
     of Group(group):
@@ -583,7 +619,7 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
             project.replace_current_canvas(canvas)
     else:
         igDummy(vec2(20, -1))
-    igSameLine(0, spacing.x)
+    same_line()
 
     igBeginGroup()
     igPushStyleVar_Y(ImGui_StyleVar_ItemSpacing.ImGuiStyleVar, 0.0)
@@ -621,8 +657,8 @@ proc draw_layer_item(app: App, project: Project, layer_id: LayerId) =
     let rect_min = igGetItemRectMin()
     let rect_max = igGetItemRectMax()
     var color = igImLerp_Vec4(igGetStyleColorVec4(ImGui_Col_FrameBg.ImGuiCol)[], igGetStyleColorVec4(ImGui_Col_FrameBgActive.ImGuiCol)[], factor)
-    if layer.is_group():
-        color = add_hsv(color, 0, -0.2, -0.2)
+    # if layer.is_group():
+    #     color = add_hsv(color, 0, -0.2, -0.2)
     drawlist.ImDrawList_AddRectFilled(rect_min, rect_max, to_color(color), rounding, ImDrawFlags_None.ImDrawFlags)
     if layer.is_group():
         let border_color = igGetStyleColorVec4(ImGui_Col_Border.ImGuiCol)[]
@@ -652,10 +688,22 @@ func get_current_layer(project: Project): tuple[layer: Layer, valid: bool] =
     of None:
         return (Layer(), false)
 
+var dummy_layer_widget = LayerItemData()
+
+proc get_current_layer_item_data(project: Project, layer_id: LayerId): LayerItemData =
+    if project == nil:
+        return dummy_layer_widget
+    return project.layer_list.layers[layer_id]
+
 func push_layer_update(project: Project, layer: Layer) =
     var canvas = project.get_current_canvas()
     canvas.update(layer)
     project.push_canvas(canvas)
+
+func replace_current_layer(project: Project, layer: Layer) =
+    var canvas = project.get_current_canvas()
+    canvas.update(layer)
+    project.replace_current_canvas(canvas)
 
 proc draw_layer_edit_panel(app: App) =
     let project = app.active_project
@@ -666,17 +714,77 @@ proc draw_layer_edit_panel(app: App) =
     igBeginDisabled(disabled)
 
     let combo_flags = ImGui_ComboFlags_HeightLargest
-    if igBeginCombo("Mode", get_blend_mode_name(layer.blend_mode), combo_flags.ImGuiComboFlags):
+    if igBeginCombo("Mode", get_blend_mode_name(layer.blend_mode).cstring, combo_flags.ImGuiComboFlags):
         for mode in BlendMode.items:
             if mode == BlendMode.PASS and not layer.is_group():
                 continue
             let selected = mode == layer.blend_mode
-            if igSelectable_Bool(get_blend_mode_name(mode), selected, ImGui_SelectableFlags_None.ImGuiSelectableFlags, vec2(0, 0)):
+            if igSelectable_Bool(get_blend_mode_name(mode).cstring, selected, ImGui_SelectableFlags_None.ImGuiSelectableFlags, vec2(0, 0)):
                 layer.blend_mode = mode
                 project.push_layer_update(layer)
             if selected:
                 igSetItemDefaultFocus()
         igEndCombo()
+
+    var layer_widget = project.get_current_layer_item_data(layer.id)
+    var opacity_ptr = if layer_widget != nil: layer_widget.opacity.addr else: nil
+    if igSliderFloat("Opacity", opacity_ptr, 0, 100, "%.0f", ImGui_SliderFlags_AlwaysClamp.ImGuiSliderFlags):
+        layer.opacity = view_to_opacity(layer_widget.opacity.float)
+        if layer_widget.ephemeral_edit:
+            project.push_layer_update(layer)
+    if igIsItemActivated():
+        layer_widget.ephemeral_edit = true
+        project.replace_current_layer(layer)
+    if igIsItemDeactivatedAfterEdit():
+        layer_widget.ephemeral_edit = false
+
+    if toggle_button(ICON_CLIP, "Clipping layer", layer.clip):
+        layer.clip = not layer.clip
+        project.push_layer_update(layer)
+    same_line()
+    igSeparatorEx(ImGui_SeparatorFlags_Vertical.ImGuiSeparatorFlags, 1)
+    same_line()
+    if toggle_button(ICON_ALPHA, "Lock opacity", layer.lock_alpha):
+        layer.lock_alpha = not layer.lock_alpha
+        project.push_layer_update(layer)
+    same_line()
+    if toggle_button(ICON_PENCIL, "Lock drawing", layer.lock_draw):
+        layer.lock_draw = not layer.lock_draw
+        project.push_layer_update(layer)
+    same_line()
+    if toggle_button(ICON_MOVE, "Lock moving", layer.lock_move):
+        layer.lock_move = not layer.lock_move
+        project.push_layer_update(layer)
+    same_line()
+    if toggle_button(ICON_LOCK, "Lock all", layer.lock_all):
+        layer.lock_all = not layer.lock_all
+        project.push_layer_update(layer)
+
+    igSeparator()
+
+    if simple_button(ICON_LAYER, "New layer"):
+        app.add_new_layer()
+    same_line()
+    if simple_button(ICON_GROUP, "New group"):
+        app.add_new_group()
+    same_line()
+    if simple_button(ICON_MASK, "Add mask"):
+        discard
+    same_line()
+    if simple_button(ICON_ERASER, "Erase selected layers"):
+        discard
+
+    if simple_button(ICON_TRANSFER_DOWN, "Transfer layers down"):
+        discard
+    same_line()
+    if simple_button(ICON_MERGE, "Merge selected layers"):
+        discard
+    same_line()
+    if simple_button(ICON_APPLY_MASK, "Apply mask"):
+        discard
+    same_line()
+    if simple_button(ICON_DELETE, "Delete selected layers"):
+        discard
 
     igEndDisabled()
 
@@ -684,13 +792,15 @@ proc draw_layer_edit_panel(app: App) =
 
 proc draw_layers_list(app: App) =
     if app.show_layers:
-        if igBegin("Layers###layers-list", nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
+        if igBegin("Layers###layers-panel", nil, (ImGui_WindowFlags_None).ImGuiWindowFlags):
             app.draw_layer_edit_panel()
-            let project = app.active_project
-            if not project.isNil:
-                let canvas = project.get_current_canvas()
-                for layer in reverse_group_layers_iter(canvas):
-                    draw_layer_item(app, project, layer.id)
+            if igBeginChild_Str("###layers-list", vec2(0, 0), ImGui_ChildFlags_None.ImGuiChildFlags, ImGui_WindowFlags_None.ImGuiWindowFlags):
+                let project = app.active_project
+                if not project.isNil:
+                    let canvas = project.get_current_canvas()
+                    for layer in reverse_group_layers_iter(canvas):
+                        draw_layer_item(app, project, layer.id)
+                igEndChild()
         igEnd()
 
 proc set_theme(app: App) =
@@ -805,12 +915,27 @@ proc main(): void =
     let io = igGetIO_ContextPtr(ctx)
     io.ConfigFlags = io.ConfigFlags or ImGui_ConfigFlags_DockingEnable.ImGuiConfigFlags
     io.ConfigWindowsMoveFromTitleBarOnly = true
-    var font_cfg = ImFontConfig_ImFontConfig()
-    defer: ImFontConfig_destroy(font_cfg)
-    font_cfg[].FontDataOwnedByAtlas = false
-    var data_temp = font_file
-    let font = io.Fonts.ImFontAtlas_AddFontFromMemoryTTF(data_temp[0].addr, font_file.len().cint, 18, font_cfg, nil)
-    data_temp = ""
+
+    # Main font
+    block:
+        var font_cfg = ImFontConfig_ImFontConfig()
+        defer: ImFontConfig_destroy(font_cfg)
+        font_cfg[].FontDataOwnedByAtlas = false
+        var data_temp = font_file
+        io.Fonts.ImFontAtlas_AddFontFromMemoryTTF(data_temp[0].addr, font_file.len().cint, 18, font_cfg, nil)
+
+    # Icon font
+    block:
+        var font_cfg = ImFontConfig_ImFontConfig()
+        defer: ImFontConfig_destroy(font_cfg)
+        with font_cfg[]:
+            FontDataOwnedByAtlas = false
+            MergeMode = true
+            GlyphMinAdvanceX = 13.0
+        var data_temp = icon_file
+        var glyphs_range:array[2, ImWchar] = [MIN_ICON.ImWchar, MAX_ICON.ImWchar]
+        io.Fonts.ImFontAtlas_AddFontFromMemoryTTF(data_temp[0].addr, font_file.len().cint, 18, font_cfg, glyphs_range[0].addr)
+
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context)
     defer: ImGui_ImplSdl3_Shutdown()
     ImGui_ImplOpenGL3_Init("#version 430 core")
